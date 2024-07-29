@@ -1,4 +1,6 @@
 # Tab Dock Extension
+[Official website](http://jc.vasselon.com/TabDockWebsite/)
+
 ## Why?
 Because I use too many tabs and I always lose them.
 
