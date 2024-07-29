@@ -36,10 +36,11 @@ If you want to use the source, rename manifest.YOURBROWSER.json into manifest.js
 Of course, as you can guess, I'm still a begineer in CSS.
 
 ## Can I fork it?
-As long as the project stay open-source, you do as you want!
+As long as the project stays open-source, you do as you want!
 
 ## What's coming?
 [ ] Firefox support... I hope, one day... Hey, it worked
+
 [ ] Animations improvements
 
 ## How can I support you?
