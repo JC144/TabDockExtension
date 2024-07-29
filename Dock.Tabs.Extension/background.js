@@ -32,7 +32,7 @@ class Background {
         this.tabData = data.tabData;
       }
     });
-    
+
     this.browser.tabs.onCreated.addListener((tab) => this.#updateTab(tab));
     this.browser.tabs.onRemoved.addListener((tabId) => this.#removeTab(tabId));
     this.browser.tabs.onUpdated.addListener((tabId, info, tab) => this.#onTabUpdated(tabId, info, tab));
@@ -98,7 +98,10 @@ class Background {
         this.tabData[tabDataIndex].tabs.splice(domainData.tabs.indexOf(correspondingTab), 1);
       }
     }
-    this.tabData = this.tabData.filter(t => t.tabs.length != 0);
+    const dockToRemove = this.tabData.filter(t => t.tabs.length == 0);
+    for (const dock in dockToRemove) {
+      this.tabData.splice(this.tabData.indexOf(dock), 1);
+    }
     this.#saveTabData();
   }
 
@@ -117,8 +120,16 @@ class Background {
             favicon: tab.favIconUrl || this.#getFaviconURL(tab.url)
           });
         }
+        else{
+          domainData.url = tab.url;
+          domainData.title = tab.title;
+          domainData.favicon = tab.favIconUrl || this.#getFaviconURL(tab.url)
+        }
       } else {
-        // If it's a new domain, add it to the end of tabData
+        // If it's a new domain
+        // Remove the old tab and maybe its domain
+        this.#removeTab(tab.id);
+        // add it to the end of tabData
         this.tabData.push({
           domain: new URL(tab.url).hostname,
           tabs: [{
