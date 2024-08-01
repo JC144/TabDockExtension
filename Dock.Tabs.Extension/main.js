@@ -12,7 +12,12 @@ class Main {
 
     #initialize() {
         this.dock = new Dock();
-        this.browser = chrome ?? browser;
+        if (this.browser === undefined) {
+            this.browser = chrome;
+          }
+          else {
+            this.browser = this.browser;
+          }
 
         this.#registerEvents();
         this.#loadTabs();

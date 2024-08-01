@@ -21,7 +21,12 @@ class DockItem {
         this.domain = domain;
         this.parent = parent;
 
-        this.browser = chrome ?? browser;
+        if (this.browser === undefined) {
+            this.browser = chrome;
+          }
+          else {
+            this.browser = this.browser;
+          }
 
         this.#createDockItem(tabs);
         this.#registerEvents();

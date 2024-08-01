@@ -6,7 +6,12 @@ class TabItem {
     #initialize(tab, parent) {
         this.tab = tab;
         this.parent = parent;
-        this.browser = chrome ?? browser;
+        if (this.browser === undefined) {
+            this.browser = chrome;
+          }
+          else {
+            this.browser = this.browser;
+          }
 
         this.#createTabElement();
     }

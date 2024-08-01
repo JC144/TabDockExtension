@@ -19,7 +19,12 @@ class Dock {
 
         this.dockItems = [];
 
-        this.browser = chrome ?? browser;
+        if (this.browser === undefined) {
+            this.browser = chrome;
+          }
+          else {
+            this.browser = this.browser;
+          }
 
         this.#createDock();
         this.#registerEvents();
@@ -192,7 +197,7 @@ class Dock {
 
         this.browser.storage.local.set({ tabData: tabData });
 
-        chrome.runtime.sendMessage({
+        this.browser.runtime.sendMessage({
             action: 'updateTabOrder',
             newOrder: dockItemArr.map(item => ({
                 domain: item.domain,
