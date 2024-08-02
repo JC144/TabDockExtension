@@ -14,7 +14,10 @@ class Dock {
 
         this.dom = {
             dock: null,
+            dockContainer: null,
             dockItemContainer: null,
+            dockBackground: null,
+            dropdownContainer: null
         };
 
         this.dockItems = [];
@@ -29,23 +32,32 @@ class Dock {
         this.#createDock();
         this.#registerEvents();
 
+        window.addEventListener('resize', this.#adjustContainerWidth.bind(this));
+
         this.#addHorizontalScrolling();
+        this.#addHoverBehavior();
+    }
+
+    #adjustContainerWidth() {
+        if (this.dom.dockContainer) {
+            this.dom.dockContainer.style.maxWidth = `${window.innerWidth - 160}px`;
+        }
     }
 
     #addHorizontalScrolling() {
         this.dom.dockItemContainer.addEventListener('wheel', (event) => {
             if (event.deltaY !== 0) {
                 event.preventDefault();
-                
+
                 // Calculate the scroll amount
                 const scrollAmount = event.deltaY * 2;  // Adjust multiplier for desired scroll speed
                 const currentScroll = this.dom.dockItemContainer.scrollLeft;
                 const maxScroll = this.dom.dockItemContainer.scrollWidth - this.dom.dockItemContainer.clientWidth;
-                
+
                 // Determine the new scroll position
                 let newScroll = currentScroll + scrollAmount;
-                newScroll = Math.max(0, Math.min(newScroll, maxScroll));  // Clamp the value
-                
+                newScroll = Math.max(0, Math.min(newScroll, maxScroll));
+
                 // Perform the smooth scroll
                 this.dom.dockItemContainer.scrollTo({
                     left: newScroll,
@@ -77,17 +89,27 @@ class Dock {
 
         const fragment = document.createDocumentFragment();
 
-        const dockContainer = document.createElement('div');
-        dockContainer.className = 'dock-container';
+        this.dom.dockBackground = document.createElement('div');
+        this.dom.dockBackground.className = 'dock-background';
+
+        this.dom.dockContainer = document.createElement('div');
+        this.dom.dockContainer.className = 'dock-container';
 
         this.dom.dockItemContainer = document.createElement('div');
         this.dom.dockItemContainer.id = 'tab-group-container';
         this.dom.dockItemContainer.className = 'tab-group-container';
-        dockContainer.appendChild(this.dom.dockItemContainer);
 
-        fragment.appendChild(dockContainer);
+        this.dom.dropdownContainer = document.createElement('div');
+        this.dom.dropdownContainer.className = 'dropdown-container';
+
+        this.#adjustContainerWidth();
+
+        this.dom.dockContainer.appendChild(this.dom.dockItemContainer);
+        fragment.appendChild(this.dom.dockBackground);
+        fragment.appendChild(this.dom.dockContainer);
+        fragment.appendChild(this.dom.dropdownContainer);
+
         template.appendChild(fragment);
-
         shadow.appendChild(template);
         document.body.appendChild(this.dom.dock);
 
@@ -141,7 +163,7 @@ class Dock {
 
     #collapseDock() {
         if (this.dom.dock) {
-            this.dom.dock.style.bottom = '-48px';
+            this.dom.dock.style.bottom = '-54px';
             this.state.isOpen = false;
             this.browser.runtime.sendMessage({ action: 'collapseDock' });
         }
@@ -152,6 +174,80 @@ class Dock {
             this.dom.dock.style.bottom = '10px';
             this.state.isOpen = true;
         }
+    }
+
+    #addHoverBehavior() {
+        this.dom.dockItemContainer.addEventListener('mouseover', (event) => {
+            const favicon = event.target.closest('.favicon');
+            if (favicon) {
+                const domain = favicon.dataset.domain;
+                this.#showDropdown(domain);
+            }
+        });
+
+        this.dom.dockItemContainer.addEventListener('mouseout', (event) => {
+            const favicon = event.target.closest('.favicon');
+            if (favicon) {
+                const domain = favicon.dataset.domain;
+                this.#hideDropdown(domain);
+            }
+        });
+
+        this.dom.dropdownContainer.addEventListener('mouseover', (event) => {
+            const dropdown = event.target.closest('.dropdown-content');
+            if (dropdown) {
+                dropdown.classList.add('active');
+            }
+        });
+
+        this.dom.dropdownContainer.addEventListener('mouseout', (event) => {
+            const dropdown = event.target.closest('.dropdown-content');
+            if (dropdown) {
+                dropdown.classList.remove('active');
+            }
+        });
+    }
+
+    #showDropdown(domain) {
+        const dropdown = this.dom.dropdownContainer.querySelector(`.dropdown-content[data-domain="${domain}"]`);
+        const favicon = this.dom.dockItemContainer.querySelector(`.favicon[data-domain="${domain}"]`);
+        if (dropdown && favicon) {
+            dropdown.classList.add('active');
+            this.#positionDropdown(dropdown, favicon);
+        }
+    }
+
+    #hideDropdown(domain) {
+        const dropdown = this.dom.dropdownContainer.querySelector(`.dropdown-content[data-domain="${domain}"]`);
+        if (dropdown) {
+            setTimeout(() => {
+                if (!dropdown.matches(':hover')) {
+                    dropdown.classList.remove('active');
+                }
+            }, 100);
+        }
+    }
+
+    #positionDropdown(dropdown, favicon) {
+        const faviconRect = favicon.getBoundingClientRect();
+        const dockRect = this.dom.dock.getBoundingClientRect();
+        const dropdownRect = dropdown.getBoundingClientRect();
+        const marginSide = (window.innerWidth - dockRect.width);
+
+        // Calculate the left position
+        let leftPosition = faviconRect.left - dockRect.left + faviconRect.width / 2;
+
+        // Check if the dropdown would overflow on the right side
+        if (window.innerWidth < (leftPosition + dropdownRect.width)) {
+            leftPosition = (window.innerWidth - dropdownRect.width) + (marginSide) - 42;
+        }
+
+        // Check if the dropdown would overflow on the left side
+        if (leftPosition < marginSide) {
+            leftPosition = marginSide;
+        }
+
+        dropdown.style.left = `${leftPosition}px`;
     }
 
     #createTabGroup(domain, tabs) {
@@ -185,6 +281,8 @@ class Dock {
         });
 
         this.dockItems[dockItem.domain] = dockItem;
+        this.dom.dockItemContainer.appendChild(dockItem.dom.button);
+        this.dom.dropdownContainer.appendChild(dockItem.dom.dropdown);
         return dockItem;
     }
 

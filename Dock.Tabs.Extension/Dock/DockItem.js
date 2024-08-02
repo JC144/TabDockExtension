@@ -9,7 +9,7 @@ class DockItem {
         this.dom = {
             button: null,
             favicon: null,
-            tabsListContainer: null,
+            dropdown: null,
             tabsList: null
         };
 
@@ -37,8 +37,6 @@ class DockItem {
         this.dom.button.className = 'tab-group';
         this.dom.button.dataset.domain = this.domain;
 
-        const fragment = document.createDocumentFragment();
-
         this.dom.favicon = document.createElement('img');
         this.dom.favicon.className = 'favicon';
         this.dom.favicon.alt = this.domain;
@@ -47,18 +45,15 @@ class DockItem {
         this.setFaviconSrc(tabs[0].favicon);
 
         this.dom.button.setAttribute('draggable', true);
+        this.dom.button.appendChild(this.dom.favicon);
 
-        fragment.appendChild(this.dom.favicon);
-
-        this.dom.tabsListContainer = document.createElement('div');
-        this.dom.tabsListContainer.className = 'dropdown-container';
+        this.dom.dropdown = document.createElement('div');
+        this.dom.dropdown.className = 'dropdown-content';
+        this.dom.dropdown.dataset.domain = this.domain;
 
         this.dom.tabsList = document.createElement('div');
-        this.dom.tabsList.className = 'dropdown-content';
-        this.dom.tabsListContainer.appendChild(this.dom.tabsList);
-        fragment.appendChild(this.dom.tabsListContainer);
-
-        this.dom.button.appendChild(fragment);
+        this.dom.tabsList.className = 'tabs-list';
+        this.dom.dropdown.appendChild(this.dom.tabsList);
 
         tabs.forEach((tab) => {
             this.createTabItem(tab);
@@ -66,8 +61,8 @@ class DockItem {
     }
 
     #registerEvents() {
-        this.dom.tabsListContainer.addEventListener('click', this.#handleTabItemEvents.bind(this));
-        this.dom.tabsListContainer.addEventListener('mousedown', this.#handleTabItemEvents.bind(this));
+        this.dom.dropdown.addEventListener('click', this.#handleTabItemEvents.bind(this));
+        this.dom.dropdown.addEventListener('mousedown', this.#handleTabItemEvents.bind(this));
         this.dom.button.addEventListener('dragover', (e) => {
             e.preventDefault();
             //TODO: Add movement animation
