@@ -1,17 +1,17 @@
 class TabItem {
-    constructor(tab, parent) {        
+    constructor(tab, parent) {
         this.#initialize(tab, parent);
     }
 
     #initialize(tab, parent) {
         this.tab = tab;
         this.parent = parent;
-        if (this.browser === undefined) {
+        if (typeof browser === "undefined") {
             this.browser = chrome;
-          }
-          else {
-            this.browser = this.browser;
-          }
+        }
+        else {
+            this.browser = browser;
+        }
 
         this.#createTabElement();
     }

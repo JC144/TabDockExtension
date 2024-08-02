@@ -19,15 +19,40 @@ class Dock {
 
         this.dockItems = [];
 
-        if (this.browser === undefined) {
+        if (typeof browser === "undefined") {
             this.browser = chrome;
-          }
-          else {
-            this.browser = this.browser;
-          }
+        }
+        else {
+            this.browser = browser;
+        }
 
         this.#createDock();
         this.#registerEvents();
+
+        this.#addHorizontalScrolling();
+    }
+
+    #addHorizontalScrolling() {
+        this.dom.dockItemContainer.addEventListener('wheel', (event) => {
+            if (event.deltaY !== 0) {
+                event.preventDefault();
+                
+                // Calculate the scroll amount
+                const scrollAmount = event.deltaY * 2;  // Adjust multiplier for desired scroll speed
+                const currentScroll = this.dom.dockItemContainer.scrollLeft;
+                const maxScroll = this.dom.dockItemContainer.scrollWidth - this.dom.dockItemContainer.clientWidth;
+                
+                // Determine the new scroll position
+                let newScroll = currentScroll + scrollAmount;
+                newScroll = Math.max(0, Math.min(newScroll, maxScroll));  // Clamp the value
+                
+                // Perform the smooth scroll
+                this.dom.dockItemContainer.scrollTo({
+                    left: newScroll,
+                    behavior: 'smooth'
+                });
+            }
+        });
     }
 
     #createDock() {

@@ -1,10 +1,10 @@
 class Background {
   constructor() {
-    if (this.browser === undefined) {
+    if (typeof browser === "undefined") {
       this.browser = chrome;
     }
     else {
-      this.browser = this.browser;
+      this.browser = browser;
     }
 
     this.#initialize();
@@ -86,8 +86,20 @@ class Background {
     let favIconUrl = new URL(this.browser.runtime.getURL("/_favicon/"));
     favIconUrl.searchParams.set("pageUrl", u);
     favIconUrl.searchParams.set("size", "32");
-
-    return favIconUrl.toString();
+    fetch(favIconUrl.toString())
+      .then(response => {
+        if (response.ok && response.headers.get('Content-Type').startsWith('image/')) {
+          // If successful, return the favicon URL
+          return favIconUrl.toString();
+        } else {
+          // If unsuccessful, use the default favicon
+          return this.browser.runtime.getURL("images/default_favicon.png");
+        }
+      })
+      .catch(() => {
+        // If there's an error (e.g., network error), use the default favicon
+        return this.browser.runtime.getURL("images/default_favicon.png");
+      });
   }
 
   #removeTab(tabId) {
@@ -120,7 +132,7 @@ class Background {
             favicon: tab.favIconUrl || this.#getFaviconURL(tab.url)
           });
         }
-        else{
+        else {
           domainData.url = tab.url;
           domainData.title = tab.title;
           domainData.favicon = tab.favIconUrl || this.#getFaviconURL(tab.url)
