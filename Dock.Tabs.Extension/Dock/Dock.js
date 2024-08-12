@@ -233,20 +233,20 @@ class Dock {
         const dockRect = this.dom.dock.getBoundingClientRect();
         const dropdownRect = dropdown.getBoundingClientRect();
         const marginSide = (window.innerWidth - dockRect.width);
+        const marginOneSide = marginSide / 2;
+        const dropDownRectHalfSized = (dropdownRect.width / 2);
 
         // Calculate the left position
         let leftPosition = faviconRect.left - dockRect.left + faviconRect.width / 2;
 
-        // Check if the dropdown would overflow on the right side
-        if (window.innerWidth < (leftPosition + dropdownRect.width)) {
-            leftPosition = (window.innerWidth - dropdownRect.width) + (marginSide) - 42;
-        }
-
         // Check if the dropdown would overflow on the left side
-        if (leftPosition < marginSide) {
-            leftPosition = marginSide;
+        if ((marginOneSide - dropDownRectHalfSized) + leftPosition < 0) {
+            leftPosition = 0 - (marginOneSide - dropDownRectHalfSized);
         }
-
+        // Check if the dropdown would overflow on the right side
+        else if (marginOneSide + dockRect.width + (dropDownRectHalfSized - (dockRect.width - leftPosition)) > window.innerWidth) {
+            leftPosition = (window.innerWidth - (marginOneSide + dockRect.width + (dropDownRectHalfSized - (dockRect.width - leftPosition))) + leftPosition);
+        }
         dropdown.style.left = `${leftPosition}px`;
     }
 
