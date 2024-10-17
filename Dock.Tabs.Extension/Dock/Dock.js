@@ -17,7 +17,8 @@ class Dock {
             dockContainer: null,
             dockItemContainer: null,
             dockBackground: null,
-            dropdownContainer: null
+            dropdownContainer: null,
+            closeButton: null
         };
 
         this.dockItems = [];
@@ -36,6 +37,28 @@ class Dock {
 
         this.#addHorizontalScrolling();
         this.#addHoverBehavior();
+
+        this.#createCloseButton();
+        this.#registerCloseButtonEvents();
+    }
+
+    #createCloseButton() {
+        this.dom.closeButton = document.createElement('div');
+        this.dom.closeButton.className = 'dock-close-button';
+        this.dom.closeButton.innerHTML = '&#x2715;'; // Unicode for '×'
+        this.dom.closeButton.title = 'Close';
+        this.dom.dockContainer.appendChild(this.dom.closeButton);
+    }
+
+    #registerCloseButtonEvents() {
+        this.dom.closeButton.addEventListener('click', () => {
+            this.#closeDock();
+        });
+    }
+
+    #closeDock() {
+        // Remove the dock from the DOM
+        this.dom.dock.remove();
     }
 
     #adjustContainerWidth() {
