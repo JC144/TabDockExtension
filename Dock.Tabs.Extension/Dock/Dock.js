@@ -429,6 +429,41 @@ class Dock {
             this.reorderDom(dockItemArr);
         }
     }
+
+    destroy() {
+        // Remove all event listeners
+        window.removeEventListener('resize', this.#adjustContainerWidth.bind(this));
+        
+        // Clean up DOM elements
+        if (this.dom.dock) {
+            this.dom.dock.remove();
+        }
+    
+        // Clear all items
+        for (const domain in this.dockItems) {
+            if (this.dockItems[domain]) {
+                this.dockItems[domain].remove();
+            }
+        }
+        this.dockItems = [];
+    
+        // Clear DOM references
+        this.dom = {
+            dock: null,
+            dockContainer: null,
+            dockItemContainer: null,
+            dockBackground: null,
+            dropdownContainer: null,
+            closeButton: null
+        };
+    
+        // Reset state
+        this.state = {
+            isOver: false,
+            isOpen: false,
+            draggedDockItem: null
+        };
+    }
 }
 
 export default Dock;

@@ -1,4 +1,6 @@
 class Background {
+  #updateTimeout;
+
   constructor() {
     if (typeof browser === "undefined") {
       this.browser = chrome;
@@ -22,7 +24,7 @@ class Background {
         this.#updateTab(tab);
       });
     }).then(() => {
-      this.#saveTabData();
+      this.#debouncedSaveTabData();
     });
   }
 
@@ -58,7 +60,7 @@ class Background {
     }).filter(Boolean);
 
     this.tabData = orderedTabData;
-    this.#saveTabData();
+    this.#debouncedSaveTabData();
   }
 
   #onMessageReceived(message) {
@@ -114,7 +116,7 @@ class Background {
     for (const dock in dockToRemove) {
       this.tabData.splice(this.tabData.indexOf(dock), 1);
     }
-    this.#saveTabData();
+    this.#debouncedSaveTabData();
   }
 
   #updateTab(tab) {
@@ -152,8 +154,15 @@ class Background {
           }]
         });
       }
-      this.#saveTabData();
+      this.#debouncedSaveTabData();
     }
+  }
+
+  #debouncedSaveTabData() {
+    clearTimeout(this.#updateTimeout);
+    this.#updateTimeout = setTimeout(() => {
+      this.#saveTabData();
+    }, 1000); // Adjust the delay as needed
   }
 
   #saveTabData() {
