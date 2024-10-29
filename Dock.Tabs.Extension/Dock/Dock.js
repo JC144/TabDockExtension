@@ -9,7 +9,8 @@ class Dock {
         this.state = {
             isOver: false,
             isOpen: true,
-            draggedDockItem: null
+            draggedDockItem: null,
+            isLoading: true 
         };
 
         this.dom = {
@@ -137,6 +138,35 @@ class Dock {
         document.body.appendChild(this.dom.dock);
 
         this.expandDock();
+
+        if (this.state.isLoading) {
+            this.dom.dock.style.opacity = '0';
+            this.dom.dock.style.transform = 'translate(-50%, 20px)';
+            this.dom.dock.style.transition = 'opacity 0.3s ease, transform 0.3s ease, bottom 0.3s ease';
+        }
+    }
+
+    setLoading(loading) {
+        this.state.isLoading = loading;
+        
+        if (this.dom.dock) {
+            if (loading) {
+                this.dom.dock.style.opacity = '0';
+                this.dom.dock.style.transform = 'translate(-50%, 20px)';
+                this.#collapseDock();
+            } else {
+                // Trigger a smooth transition when showing the dock
+                setTimeout(() => {
+                    this.dom.dock.style.opacity = '1';
+                    this.dom.dock.style.transform = 'translate(-50%, 0)';
+                    this.expandDock();
+                }, 100); // Small delay to ensure transition works
+            }
+        }
+    }
+
+    isLoading() {
+        return this.state.isLoading;
     }
 
     #registerEvents() {
@@ -315,7 +345,7 @@ class Dock {
         this.dockItems[domain].startFaviconAnimation();
     }
 
-    #removeDockItem(domain) {
+    removeDockItem(domain) {
         if (this.dockItems[domain]) {
             this.dockItems[domain].remove();
         }
@@ -380,7 +410,7 @@ class Dock {
         //Remove from dock, items that have been removed from other docks
         for (const domain in this.dockItems) {
             if (!tabData.find(d => d.domain == domain) || this.dockItems[domain] === undefined || this.dockItems[domain].length == 0) {
-                this.#removeDockItem(domain);
+                this.removeDockItem(domain);
                 hasBeenModified = true;
             }
         }

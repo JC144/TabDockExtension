@@ -24,17 +24,11 @@ class Background {
         this.#updateTab(tab);
       });
     }).then(() => {
-      this.#debouncedSaveTabData();
+      this.#saveTabData();
     });
   }
 
   #registerEvents() {
-    this.browser.storage.local.get('tabData', (data) => {
-      if (data.tabData) {
-        this.tabData = data.tabData;
-      }
-    });
-
     this.browser.tabs.onCreated.addListener((tab) => this.#updateTab(tab));
     this.browser.tabs.onRemoved.addListener((tabId) => this.#removeTab(tabId));
     this.browser.tabs.onUpdated.addListener((tabId, info, tab) => this.#onTabUpdated(tabId, info, tab));
@@ -113,8 +107,8 @@ class Background {
       }
     }
     const dockToRemove = this.tabData.filter(t => t.tabs.length == 0);
-    for (const dock in dockToRemove) {
-      this.tabData.splice(this.tabData.indexOf(dock), 1);
+    for (const dockId in dockToRemove) {
+      this.tabData.splice(this.tabData.indexOf(dockToRemove[dockId]), 1);
     }
     this.#debouncedSaveTabData();
   }

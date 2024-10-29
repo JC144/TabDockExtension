@@ -29,12 +29,20 @@ class Main {
         this.#loadTabs();
     }
 
-    #initializeDock() {
+    async #initializeDock() {
         if (!this.initialized) {
             this.dock = new Dock();
+            this.dock.setLoading(true);
             this.#registerEvents();
-            this.#loadTabs();
-            this.initialized = true;
+
+            try {
+                this.initialized = true;
+                await this.#loadTabs();
+                this.dock.setLoading(false); // Turn off loading state when done
+            } catch (error) {
+                console.error('Failed to initialize dock:', error);
+                this.#cleanupDock();
+            }
         }
     }
 
@@ -96,11 +104,23 @@ class Main {
     }
 
     #loadTabs() {
-        if (!this.dock) return;
-        this.browser.storage.local.get('tabData', (data) => {
-            if (data.tabData) {
-                this.dock.update(data.tabData);
-            }
+        if (!this.dock) {
+            this.#initializeDock();
+            return;
+        }
+
+        return new Promise((resolve, reject) => {
+            this.browser.storage.local.get('tabData', (data) => {
+                if (chrome.runtime.lastError) {
+                    reject(chrome.runtime.lastError);
+                    return;
+                }
+                
+                if (data.tabData) {
+                    this.dock.update(data.tabData);
+                }
+                resolve(data.tabData || []);
+            });
         });
     }
 }

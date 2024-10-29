@@ -95,6 +95,10 @@ class DockItem {
 
     #closeTab(tabId) {
         this.browser.runtime.sendMessage({ action: 'closeTab', tabId: tabId });
+        this.removeTabItem(tabId);
+        if(this.tabItems.length == 0){
+            this.parent.removeDockItem(this.domain);
+        }
     }
 
     #reorderArray(arr, oldIndex, newIndex) {
@@ -182,7 +186,7 @@ class DockItem {
         tabItem.remove();
     }
 
-    remove() {
+    remove() {        
         this.dom.button.remove();
         this.tabItems = [];
     }
