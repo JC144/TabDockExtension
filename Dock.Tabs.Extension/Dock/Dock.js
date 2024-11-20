@@ -260,8 +260,6 @@ class Dock {
 
         if (this.state.isLoading) {
             this.dom.dock.style.opacity = '0';
-            this.dom.dock.style.transform = 'translate(-50%, 20px)';
-            this.dom.dock.style.transition = 'opacity 0.3s ease, transform 0.3s ease, bottom 0.3s ease';
         }
     }
 

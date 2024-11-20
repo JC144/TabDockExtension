@@ -166,7 +166,7 @@
 /* For top dock - dropdowns appear below */
 .dropdown-container.top {
   bottom: auto;
-  top: 60%;
+  top: 90%;
 }
 
 .dropdown-content {
@@ -189,7 +189,6 @@
 .dropdown-container:not(.top) .dropdown-content.active {
   visibility: visible;
   opacity: 1;
-  transform: translateX(-50%) translateY(-100%);
 }
 
 /* For top dock - dropdowns slide down */
@@ -201,7 +200,6 @@
 .dropdown-container.top .dropdown-content.active {
   visibility: visible;
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
 }
 
 /* Tabs list positioning */
