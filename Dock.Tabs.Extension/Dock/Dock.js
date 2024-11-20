@@ -10,7 +10,8 @@ class Dock {
             isOver: false,
             isOpen: true,
             draggedDockItem: null,
-            isLoading: true 
+            isLoading: true,
+            position: 'bottom'
         };
 
         this.dom = {
@@ -19,7 +20,10 @@ class Dock {
             dockItemContainer: null,
             dockBackground: null,
             dropdownContainer: null,
-            closeButton: null
+            closeButton: null,
+            positionControls: null,
+            upButton: null,
+            downButton: null
         };
 
         this.dockItems = [];
@@ -32,6 +36,7 @@ class Dock {
         }
 
         this.#createDock();
+        this.#createPositionControls();
         this.#registerEvents();
 
         window.addEventListener('resize', this.#adjustContainerWidth.bind(this));
@@ -54,6 +59,120 @@ class Dock {
     #registerCloseButtonEvents() {
         this.dom.closeButton.addEventListener('click', () => {
             this.#closeDock();
+        });
+    }
+
+    #createPositionControls() {
+        // Create container for position controls
+        this.dom.positionControls = document.createElement('div');
+        this.dom.positionControls.className = 'dock-position-controls';
+
+        // Create up button
+        this.dom.upButton = document.createElement('div');
+        this.dom.upButton.className = 'position-button';
+        this.dom.upButton.innerHTML = `
+            <svg viewBox="0 0 24 24">
+                <path d="M12 4l-8 8h16l-8-8z"/>
+            </svg>
+        `;
+
+        // Create down button
+        this.dom.downButton = document.createElement('div');
+        this.dom.downButton.className = 'position-button';
+        this.dom.downButton.innerHTML = `
+            <svg viewBox="0 0 24 24">
+                <path d="M12 20l-8-8h16l-8 8z"/>
+            </svg>
+        `;
+
+        this.dom.positionControls.appendChild(this.dom.upButton);
+        this.dom.positionControls.appendChild(this.dom.downButton);
+        this.dom.dockContainer.appendChild(this.dom.positionControls);
+
+        this.#updatePositionButtons();
+    }
+
+    #updatePositionButtons() {
+        if (this.state.position === 'bottom') {
+            this.dom.upButton.classList.add('visible');
+            this.dom.downButton.classList.remove('visible');
+        } else {
+            this.dom.upButton.classList.remove('visible');
+            this.dom.downButton.classList.add('visible');
+        }
+    }
+
+    #registerPositionControlEvents() {
+        this.dom.upButton.addEventListener('click', () => {
+            this.#moveDockTo('top');
+        });
+
+        this.dom.downButton.addEventListener('click', () => {
+            this.#moveDockTo('bottom');
+        });
+    }
+
+    #moveDockTo(position) {
+        const wasTop = this.state.position === 'top';
+        this.state.position = position;
+        const isTop = position === 'top';
+        
+        // Only recreate if position actually changed
+        if (wasTop !== isTop) {
+            this.#recreateDropdowns();
+        }
+
+        this.dom.dock.classList.toggle('top', isTop);
+        this.dom.dockContainer.classList.toggle('top', isTop);
+        this.dom.dropdownContainer.classList.toggle('top', isTop);
+        
+        if (isTop) {
+            this.dom.dock.style.bottom = 'auto';
+            this.dom.dock.style.top = '10px';
+        } else {
+            this.dom.dock.style.top = 'auto';
+            this.dom.dock.style.bottom = '10px';
+        }
+
+        this.#updatePositionButtons();
+    }
+
+    #recreateDropdowns() {
+        // Store the current dropdowns data
+        const dropdownsData = Object.values(this.dockItems).map(dockItem => ({
+            domain: dockItem.domain,
+            tabs: dockItem.tabItems.map(item => item.tab)
+        }));
+
+        // Remove all existing dropdowns
+        this.dom.dropdownContainer.innerHTML = '';
+
+        // Recreate dropdowns with new structure
+        dropdownsData.forEach(data => {
+            const dockItem = this.dockItems[data.domain];
+            if (dockItem) {
+                // Remove old dropdown
+                dockItem.dom.dropdown.remove();
+                
+                // Create new dropdown
+                dockItem.dom.dropdown = document.createElement('div');
+                dockItem.dom.dropdown.className = 'dropdown-content';
+                dockItem.dom.dropdown.dataset.domain = data.domain;
+
+                dockItem.dom.tabsList = document.createElement('div');
+                dockItem.dom.tabsList.className = 'tabs-list';
+                dockItem.dom.dropdown.appendChild(dockItem.dom.tabsList);
+
+                // Recreate tab items
+                data.tabs.forEach(tab => {
+                    const tabItem = dockItem.tabItems.find(t => t.tab.id === tab.id);
+                    if (tabItem) {
+                        dockItem.dom.tabsList.appendChild(tabItem.dom.tabItem);
+                    }
+                });
+
+                this.dom.dropdownContainer.appendChild(dockItem.dom.dropdown);
+            }
         });
     }
 
@@ -170,6 +289,8 @@ class Dock {
     }
 
     #registerEvents() {
+        this.#registerPositionControlEvents();
+
         this.dom.dock.addEventListener('mouseover', e => {
             this.state.isOver = true;
             this.expandDock();
@@ -182,8 +303,14 @@ class Dock {
         this.dom.dockItemContainer.addEventListener('mousedown', this.#handleDockItemEvents.bind(this));
 
         document.addEventListener('mousemove', (e) => {
-            if (this.state.isOpen && !this.state.isOver && e.clientY < (window.innerHeight - (window.innerHeight * 0.1))) {
-                this.#collapseDock();
+            if (this.state.isOpen && !this.state.isOver) {
+                if (this.state.position === 'bottom' && 
+                    e.clientY < (window.innerHeight - (window.innerHeight * 0.1))) {
+                    this.#collapseDock();
+                } else if (this.state.position === 'top' && 
+                         e.clientY > (window.innerHeight * 0.1)) {
+                    this.#collapseDock();
+                }
             }
         });
     }
@@ -216,7 +343,11 @@ class Dock {
 
     #collapseDock() {
         if (this.dom.dock) {
-            this.dom.dock.style.bottom = '-54px';
+            if (this.state.position === 'bottom') {
+                this.dom.dock.style.bottom = '-54px';
+            } else {
+                this.dom.dock.style.top = '-54px';
+            }
             this.state.isOpen = false;
             this.browser.runtime.sendMessage({ action: 'collapseDock' });
         }
@@ -224,7 +355,11 @@ class Dock {
 
     expandDock() {
         if (this.dom.dock) {
-            this.dom.dock.style.bottom = '10px';
+            if (this.state.position === 'bottom') {
+                this.dom.dock.style.bottom = '10px';
+            } else {
+                this.dom.dock.style.top = '10px';
+            }
             this.state.isOpen = true;
         }
     }
@@ -300,7 +435,15 @@ class Dock {
         else if (marginOneSide + dockRect.width + (dropDownRectHalfSized - (dockRect.width - leftPosition)) > window.innerWidth) {
             leftPosition = (window.innerWidth - (marginOneSide + dockRect.width + (dropDownRectHalfSized - (dockRect.width - leftPosition))) + leftPosition);
         }
+
         dropdown.style.left = `${leftPosition}px`;
+
+        // Set max-height based on available space
+        const availableSpace = this.state.position === 'top' 
+            ? window.innerHeight - dockRect.bottom - 10  // Space below dock
+            : dockRect.top - 10;  // Space above dock
+
+        dropdown.querySelector('.tabs-list').style.maxHeight = `${Math.min(300, availableSpace)}px`;
     }
 
     #createTabGroup(domain, tabs) {

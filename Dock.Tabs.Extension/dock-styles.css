@@ -12,8 +12,57 @@
   background-color: transparent;
   padding: 10px 0;
   margin: 0 10px 10px;
-  transition: bottom 0.3s ease;
+  transition: bottom 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), 
+              top 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
   z-index: 9999;
+}
+
+#dock.top {
+  bottom: auto;
+  top: -60px;
+  flex-direction: column-reverse;
+}
+
+.dock-position-controls {
+  position: absolute;
+  left: -40px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.position-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(83, 83, 83, 0.25);
+  backdrop-filter: blur(13px);
+  -webkit-backdrop-filter: blur(13px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s ease, background-color 0.2s ease;
+  pointer-events: none;
+}
+
+.position-button.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.position-button:hover {
+  background: rgba(83, 83, 83, 0.4);
+}
+
+.position-button svg {
+  width: 16px;
+  height: 16px;
+  fill: white;
 }
 
 .dock-container,
@@ -102,30 +151,60 @@
 
 .dropdown-container {
   position: absolute;
-  bottom: 60%;
   left: 0;
   right: 0;
   pointer-events: none;
   transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
 }
 
+/* For bottom dock - dropdowns appear above */
+.dropdown-container:not(.top) {
+  top: auto;
+  bottom: 60%;
+}
+
+/* For top dock - dropdowns appear below */
+.dropdown-container.top {
+  bottom: auto;
+  top: 60%;
+}
+
 .dropdown-content {
   position: absolute;
-  bottom: 100%;
   left: 50%;
   transform: translateX(-50%);
   visibility: hidden;
   opacity: 0;
   transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
   pointer-events: auto;
+  z-index: 10000; /* Ensure dropdowns appear above the dock */
 }
 
-.dropdown-content.active {
+/* For bottom dock - dropdowns slide up */
+.dropdown-container:not(.top) .dropdown-content {
+  bottom: 0;
+  top: auto;
+}
+
+.dropdown-container:not(.top) .dropdown-content.active {
   visibility: visible;
   opacity: 1;
-  transform: translateX(-50%) translateY(-10px);
+  transform: translateX(-50%) translateY(-100%);
 }
 
+/* For top dock - dropdowns slide down */
+.dropdown-container.top .dropdown-content {
+  top: 0;
+  bottom: auto;
+}
+
+.dropdown-container.top .dropdown-content.active {
+  visibility: visible;
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Tabs list positioning */
 .tabs-list {
   border-radius: 8px;
   padding: 8px 4px 8px 8px;
@@ -133,9 +212,27 @@
   width: 400px;
   overflow-y: auto;
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.5) transparent;
+}
+
+/* Specific ordering for bottom dock */
+#dock:not(.top) .dropdown-content {
+  transform: translateX(-50%) translateY(0);
+}
+
+#dock:not(.top) .dropdown-content.active {
+  transform: translateX(-50%) translateY(-100%);
+}
+
+/* Animation adjustments */
+#dock:not(.top) .dropdown-content {
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
+}
+
+#dock.top .dropdown-content {
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
 }
 
 .dropdown-content::-webkit-scrollbar {
