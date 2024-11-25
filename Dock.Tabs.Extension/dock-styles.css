@@ -24,35 +24,34 @@
 }
 
 .dock-position-controls {
-  position: absolute;
-  left: -40px;
-  top: 50%;
-  transform: translateY(-50%);
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .position-button {
-  width: 32px;
-  height: 32px;
+  opacity: 0;
+  margin: 3px 6px 0px 3px;
+  width: 16px;
+  height: 16px;
+  background-color: rgba(255, 255, 255, 0.3);
   border-radius: 50%;
-  background: rgba(83, 83, 83, 0.25);
-  backdrop-filter: blur(13px);
-  -webkit-backdrop-filter: blur(13px);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  display: flex;
   justify-content: center;
   align-items: center;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s ease, background-color 0.2s ease;
-  pointer-events: none;
+  font-size: 10px;
+  color: black;
+  transition: background-color 0.2s ease;
+}
+
+.position-button:hover {
+  background-color: rgba(255, 255, 255, 0.5);
 }
 
 .position-button.visible {
   opacity: 1;
   pointer-events: auto;
+  display: flex;
 }
 
 .position-button:hover {

@@ -71,8 +71,8 @@ class Dock {
         this.dom.upButton = document.createElement('div');
         this.dom.upButton.className = 'position-button';
         this.dom.upButton.innerHTML = `
-            <svg viewBox="0 0 24 24">
-                <path d="M12 4l-8 8h16l-8-8z"/>
+            <svg viewBox="0 0 24 24" style="margin-top: 1px;">
+                <path d="M12 4l-8 8h16l-8-8z" fill="#6a6a6a"/>
             </svg>
         `;
 
@@ -80,14 +80,14 @@ class Dock {
         this.dom.downButton = document.createElement('div');
         this.dom.downButton.className = 'position-button';
         this.dom.downButton.innerHTML = `
-            <svg viewBox="0 0 24 24">
-                <path d="M12 20l-8-8h16l-8 8z"/>
+            <svg viewBox="0 0 24 24" style="margin-bottom: 3px;">
+                <path d="M12 20l-8-8h16l-8 8z" fill="#6a6a6a"/>
             </svg>
         `;
 
         this.dom.positionControls.appendChild(this.dom.upButton);
         this.dom.positionControls.appendChild(this.dom.downButton);
-        this.dom.dockContainer.appendChild(this.dom.positionControls);
+        this.dom.dockItemContainer.appendChild(this.dom.positionControls);
 
         this.#updatePositionButtons();
     }
