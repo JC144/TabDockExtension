@@ -31,21 +31,7 @@
 
 .position-button {
   opacity: 0;
-  margin: 3px 6px 0px 3px;
-  width: 16px;
-  height: 16px;
-  background-color: rgba(255, 255, 255, 0.3);
-  border-radius: 50%;
-  justify-content: center;
-  align-items: center;
-  cursor: pointer;
-  font-size: 10px;
-  color: black;
-  transition: background-color 0.2s ease;
-}
-
-.position-button:hover {
-  background-color: rgba(255, 255, 255, 0.5);
+  margin: 6px 6px 0px 3px;
 }
 
 .position-button.visible {
@@ -54,14 +40,36 @@
   display: flex;
 }
 
-.position-button:hover {
-  background: rgba(83, 83, 83, 0.4);
-}
-
 .position-button svg {
   width: 16px;
   height: 16px;
   fill: white;
+}
+
+.close-button {
+  position: absolute;
+  top: 28px;
+  right: 6px;  
+  display: flex;
+  
+  transition: background-color 0.2s ease;
+}
+
+.interaction-button:hover {
+  background-color: rgba(255, 255, 255, 0.5);
+}
+
+.interaction-button{
+  background-color: rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  font-size: 10px;
+  color: black;
+  transition: background-color 0.2s ease;
 }
 
 .dock-container,
@@ -71,27 +79,6 @@
   height: 100%;
   max-width: 100%;
   border-radius: 16px;
-}
-
-.dock-close-button {
-  position: absolute;
-  top: 28px;
-  right: 6px;
-  width: 20px;
-  height: 20px;
-  background-color: rgba(255, 255, 255, 0.3);
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  cursor: pointer;
-  font-size: 10px;
-  color: black;
-  transition: background-color 0.2s ease;
-}
-
-.dock-close-button:hover {
-  background-color: rgba(255, 255, 255, 0.5);
 }
 
 .dock-background {

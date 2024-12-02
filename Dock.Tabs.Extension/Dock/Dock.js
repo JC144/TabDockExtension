@@ -48,9 +48,74 @@ class Dock {
         this.#registerCloseButtonEvents();
     }
 
+    setWindowId(windowId) {
+        this.windowId = windowId;
+    }
+
+    saveState() {
+        const dockItemArr = Object.values(this.dockItems);
+        this.#saveState(dockItemArr);
+    }
+
+    #saveState(dockItemArr) {
+        let tabData = [];
+
+        dockItemArr.forEach(dockItem => {
+            tabData.push({ domain: dockItem.domain, tabs: dockItem.tabItems.map(t => t.tab) });
+        });
+
+        this.#recreateDockItems(dockItemArr);
+
+        this.browser.storage.local.set({ tabData: tabData });
+
+        this.browser.runtime.sendMessage({
+            action: 'updateTabOrder',
+            windowId: this.windowId,  // Include windowId in the message
+            newOrder: dockItemArr.map(item => ({
+                domain: item.domain,
+                tabIds: item.tabItems.map(tabItem => tabItem.tab.id)
+            }))
+        });
+    }
+
+    // Update the message sending methods to include windowId
+    #handleDockItemEvents(e) {
+        const target = e.target.closest('.tab-group');
+
+        if (target) {
+            const domain = target.dataset.domain;
+            const dockItem = this.dockItems[domain];
+
+            if (dockItem) {
+                switch (e.type) {
+                    case 'click':
+                        if (e.target.closest('.favicon')) {
+                            e.preventDefault();
+                            this.browser.runtime.sendMessage({ 
+                                action: 'openTab', 
+                                tabUri: dockItem.tabItems[0].tab.url,
+                                windowId: this.windowId
+                            });
+                        }
+                        break;
+                    case 'mousedown':
+                        if (e.target.closest('.favicon') && e.button === 1) {
+                            e.preventDefault();
+                            this.browser.runtime.sendMessage({ 
+                                action: 'openAndNavigateToTab', 
+                                tabUri: dockItem.tabItems[0].tab.url,
+                                windowId: this.windowId
+                            });
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
     #createCloseButton() {
         this.dom.closeButton = document.createElement('div');
-        this.dom.closeButton.className = 'dock-close-button';
+        this.dom.closeButton.className = 'interaction-button close-button';
         this.dom.closeButton.innerHTML = '&#x2715;'; // Unicode for '×'
         this.dom.closeButton.title = 'Close';
         this.dom.dockContainer.appendChild(this.dom.closeButton);
@@ -69,18 +134,18 @@ class Dock {
 
         // Create up button
         this.dom.upButton = document.createElement('div');
-        this.dom.upButton.className = 'position-button';
+        this.dom.upButton.className = 'interaction-button position-button';
         this.dom.upButton.innerHTML = `
-            <svg viewBox="0 0 24 24" style="margin-top: 1px;">
+            <svg viewBox="0 0 28 28" style="margin: 1px 0px 0px 2px;">
                 <path d="M12 4l-8 8h16l-8-8z" fill="#6a6a6a"/>
             </svg>
         `;
 
         // Create down button
         this.dom.downButton = document.createElement('div');
-        this.dom.downButton.className = 'position-button';
+        this.dom.downButton.className = 'interaction-button position-button';
         this.dom.downButton.innerHTML = `
-            <svg viewBox="0 0 24 24" style="margin-bottom: 3px;">
+            <svg viewBox="0 0 28 28" style="margin: 0px 0px 3px 2px;">
                 <path d="M12 20l-8-8h16l-8 8z" fill="#6a6a6a"/>
             </svg>
         `;
@@ -313,32 +378,6 @@ class Dock {
         });
     }
 
-    #handleDockItemEvents(e) {
-        const target = e.target.closest('.tab-group');
-
-        if (target) {
-            const domain = target.dataset.domain;
-            const dockItem = this.dockItems[domain];
-
-            if (dockItem) {
-                switch (e.type) {
-                    case 'click':
-                        if (e.target.closest('.favicon')) {
-                            e.preventDefault();
-                            this.browser.runtime.sendMessage({ action: 'openTab', tabUri: dockItem.tabItems[0].tab.url });
-                        }
-                        break;
-                    case 'mousedown':
-                        if (e.target.closest('.favicon') && e.button === 1) {
-                            e.preventDefault();
-                            this.browser.runtime.sendMessage({ action: 'openAndNavigateToTab', tabUri: dockItem.tabItems[0].tab.url });
-                        }
-                        break;
-                }
-            }
-        }
-    }
-
     #collapseDock() {
         if (this.dom.dock) {
             if (this.state.position === 'bottom') {
@@ -503,37 +542,12 @@ class Dock {
         arr.splice(newIndex, 0, arr.splice(oldIndex, 1)[0]);
     }
 
-    #saveState(dockItemArr) {
-        let tabData = [];
-
-        dockItemArr.forEach(dockItem => {
-            tabData.push({ domain: dockItem.domain, tabs: dockItem.tabItems.map(t => t.tab) });
-        });
-
-        this.#recreateDockItems(dockItemArr);
-
-        this.browser.storage.local.set({ tabData: tabData });
-
-        this.browser.runtime.sendMessage({
-            action: 'updateTabOrder',
-            newOrder: dockItemArr.map(item => ({
-                domain: item.domain,
-                tabIds: item.tabItems.map(tabItem => tabItem.tab.id)
-            }))
-        });
-    }
-
     #recreateDockItems(dockItemArr) {
         let nDockItems = [];
         for (let i = 0; i < dockItemArr.length; i++) {
             nDockItems[dockItemArr[i].domain] = dockItemArr[i];
         }
         this.dockItems = nDockItems;
-    }
-
-    saveState() {
-        const dockItemArr = Object.values(this.dockItems);
-        this.#saveState(dockItemArr);
     }
 
     reorderDom(dockItemArr) {
