@@ -5,7 +5,7 @@ class Dock {
         this.#initialize();
     }
 
-    #initialize() {
+    async #initialize() {
         this.state = {
             isOver: false,
             isOpen: true,
@@ -35,6 +35,8 @@ class Dock {
             this.browser = browser;
         }
 
+        await this.#loadSavedPosition();
+
         this.#createDock();
         this.#createPositionControls();
         this.#registerEvents();
@@ -46,6 +48,25 @@ class Dock {
 
         this.#createCloseButton();
         this.#registerCloseButtonEvents();
+
+        if (this.state.position === 'top') {
+            this.#moveDockTo(this.state.position);
+        }
+    }
+
+    async #loadSavedPosition() {
+        return new Promise((resolve) => {
+            this.browser.storage.local.get('dockPosition', (result) => {
+                if (result.dockPosition) {
+                    this.state.position = result.dockPosition;
+                }
+                resolve();
+            });
+        });
+    }
+
+    #saveDockPosition(position) {
+        this.browser.storage.local.set({ dockPosition: position });
     }
 
     setWindowId(windowId) {
@@ -137,7 +158,7 @@ class Dock {
         this.dom.upButton.className = 'interaction-button position-button';
         this.dom.upButton.innerHTML = `
             <svg viewBox="0 0 28 28" style="margin: 1px 0px 0px 2px;">
-                <path d="M12 4l-8 8h16l-8-8z" fill="#6a6a6a"/>
+                <path d="M12 4l-8 8h16l-8-8z" fill="black"/>
             </svg>
         `;
 
@@ -146,7 +167,7 @@ class Dock {
         this.dom.downButton.className = 'interaction-button position-button';
         this.dom.downButton.innerHTML = `
             <svg viewBox="0 0 28 28" style="margin: 0px 0px 3px 2px;">
-                <path d="M12 20l-8-8h16l-8 8z" fill="#6a6a6a"/>
+                <path d="M12 20l-8-8h16l-8 8z" fill="black"/>
             </svg>
         `;
 
@@ -185,6 +206,8 @@ class Dock {
         // Only recreate if position actually changed
         if (wasTop !== isTop) {
             this.#recreateDropdowns();
+            // Save the new position
+            this.#saveDockPosition(position);
         }
 
         this.dom.dock.classList.toggle('top', isTop);
@@ -284,11 +307,9 @@ class Dock {
         fetch(this.browser.runtime.getURL('dock-styles.css'))
             .then(response => response.text())
             .then(cssText => {
-                // Create a style element
                 const styleElement = document.createElement('style');
                 styleElement.textContent = cssText;
-
-                shadow.appendChild(styleElement);
+                shadow.appendChild(styleElement);                
             });
 
         let template = document.createElement('template');
