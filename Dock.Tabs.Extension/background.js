@@ -47,6 +47,7 @@ class Background {
     this.browser.tabs.onRemoved.addListener((tabId, removeInfo) => this.#removeTab(tabId, removeInfo.windowId));
     this.browser.tabs.onUpdated.addListener((tabId, info, tab) => this.#onTabUpdated(tabId, info, tab));
     this.browser.tabs.onAttached.addListener((tabId, attachInfo) => this.#handleTabAttached(tabId, attachInfo));
+    this.browser.tabs.onDetached.addListener((tabId, detachInfo) => this.#handleTabDetached(tabId, detachInfo));
 
     // Window events
     this.browser.windows.onCreated.addListener((window) => this.#handleNewWindow(window));
@@ -56,14 +57,32 @@ class Background {
   }
 
   async #handleTabAttached(tabId, attachInfo) {
-    // When a tab is moved to a different window
     const tab = await this.browser.tabs.get(tabId);
 
-    // Remove from old window
-    this.#removeTab(tabId, attachInfo.oldWindowId);
+    // Get the domain of the moved tab
+    const domain = new URL(tab.url).hostname;
 
-    // Add to new window
+    // Remove from old window
+    const oldWindowTabs = this.windowTabData.get(attachInfo.oldWindowId);
+    if (oldWindowTabs) {
+      const domainData = oldWindowTabs.find(d => d.domain === domain);
+      if (domainData) {
+        // Remove the tab
+        domainData.tabs = domainData.tabs.filter(t => t.id !== tabId);
+        
+        // If this was the last tab for this domain in the old window, remove the domain
+        if (domainData.tabs.length === 0) {
+          const domainIndex = oldWindowTabs.indexOf(domainData);
+          oldWindowTabs.splice(domainIndex, 1);
+        }
+      }
+    }
+
+    // Add to new window with updated favicon
     this.#updateTab(tab);
+
+    // Save changes for both windows
+    this.#saveTabData();
 
     // Notify the content script about the window change
     try {
@@ -72,14 +91,32 @@ class Background {
         windowId: attachInfo.newWindowId
       });
     } catch (error) {
-      // Content script might not be ready, that's ok
       console.log('Could not notify content script of window change:', error);
     }
   }
 
   #handleTabDetached(tabId, detachInfo) {
-    // Remove the tab from its old window
-    this.#removeTab(tabId, detachInfo.oldWindowId);
+    const oldWindowTabs = this.windowTabData.get(detachInfo.oldWindowId);
+    if (oldWindowTabs) {
+      // Find and remove the tab from its domain group
+      for (const domainData of oldWindowTabs) {
+        const tabIndex = domainData.tabs.findIndex(t => t.id === tabId);
+        if (tabIndex !== -1) {
+          // Remove the tab
+          domainData.tabs.splice(tabIndex, 1);
+          
+          // If this was the last tab for this domain, remove the domain
+          if (domainData.tabs.length === 0) {
+            const domainIndex = oldWindowTabs.indexOf(domainData);
+            oldWindowTabs.splice(domainIndex, 1);
+          }
+          break;
+        }
+      }
+      
+      // Save changes immediately for the old window
+      this.#saveTabData();
+    }
   }
 
   #handleNewWindow(window) {
@@ -193,17 +230,24 @@ class Background {
       windowTabs.push(domainData);
     }
 
+    // Get the favicon, prioritizing the tab's favicon
+    const faviconUrl = tab.favIconUrl || this.#getFaviconURL(tab.url);
+
     const tabData = {
       id: tab.id,
       url: tab.url,
       title: tab.title,
-      favicon: tab.favIconUrl || this.#getFaviconURL(tab.url)
+      favicon: faviconUrl
     };
 
     const existingTabIndex = domainData.tabs.findIndex(t => t.id === tab.id);
     if (existingTabIndex === -1) {
       domainData.tabs.push(tabData);
     } else {
+      // Update existing tab data, but keep the old favicon if the new one isn't available
+      if (!tabData.favicon) {
+        tabData.favicon = domainData.tabs[existingTabIndex].favicon;
+      }
       domainData.tabs[existingTabIndex] = tabData;
     }
 
@@ -221,7 +265,10 @@ class Background {
     // Convert Map to object for storage
     const tabDataObject = {};
     for (const [windowId, tabs] of this.windowTabData.entries()) {
-      tabDataObject[windowId] = tabs;
+      // Only save windows that have tabs
+      if (tabs.length > 0) {
+        tabDataObject[windowId] = tabs;
+      }
     }
     this.browser.storage.local.set({ tabData: tabDataObject });
   }
