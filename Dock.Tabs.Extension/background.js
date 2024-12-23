@@ -43,9 +43,9 @@ class Background {
 
   #registerEvents() {
     // Tab events
-    this.browser.tabs.onCreated.addListener((tab) => this.#updateTab(tab));
+    this.browser.tabs.onCreated.addListener(async (tab) => await this.#updateTab(tab));
     this.browser.tabs.onRemoved.addListener((tabId, removeInfo) => this.#removeTab(tabId, removeInfo.windowId));
-    this.browser.tabs.onUpdated.addListener((tabId, info, tab) => this.#onTabUpdated(tabId, info, tab));
+    this.browser.tabs.onUpdated.addListener(async(tabId, info, tab) => await this.#onTabUpdated(tabId, info, tab));
     this.browser.tabs.onAttached.addListener((tabId, attachInfo) => this.#handleTabAttached(tabId, attachInfo));
     this.browser.tabs.onDetached.addListener((tabId, detachInfo) => this.#handleTabDetached(tabId, detachInfo));
 
@@ -79,7 +79,7 @@ class Background {
     }
 
     // Add to new window with updated favicon
-    this.#updateTab(tab);
+    await this.#updateTab(tab);
 
     // Save changes for both windows
     this.#saveTabData();
@@ -131,9 +131,9 @@ class Background {
     this.#saveTabData();
   }
 
-  #onTabUpdated(tabId, info, tab) {
+  async #onTabUpdated(tabId, info, tab) {
     if (info.status === 'complete') {
-      this.#updateTab(tab);
+      await this.#updateTab(tab);
     }
   }
 
@@ -209,7 +209,7 @@ class Background {
     this.#debouncedSaveTabData();
   }
 
-  #updateTab(tab) {
+  async #updateTab(tab) {
     if (!tab?.url || !tab.windowId) return;
 
     let windowTabs = this.windowTabData.get(tab.windowId);
@@ -231,7 +231,7 @@ class Background {
     }
 
     // Get the favicon, prioritizing the tab's favicon
-    const faviconUrl = tab.favIconUrl || this.#getFaviconURL(tab.url);
+    const faviconUrl = tab.favIconUrl || await this.#getFaviconURL(tab.url);
 
     const tabData = {
       id: tab.id,

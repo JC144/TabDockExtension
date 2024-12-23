@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Background -->
+  <defs>
+    <linearGradient id="bg-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#E88366"/>
+      <stop offset="100%" style="stop-color:#B94436"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Main background -->
+  <rect x="0" y="0" width="128" height="128" fill="url(#bg-gradient)"/>
+  
+  <!-- Browser tabs representation -->
+  <g transform="translate(22, 25)">
+    <!-- Tab stack -->
+    <rect x="0" y="0" width="84" height="14" rx="7" fill="#ffffff" opacity="0.9"/>
+    <rect x="4" y="18" width="84" height="14" rx="7" fill="#ffffff" opacity="0.7"/>
+    <rect x="8" y="36" width="84" height="14" rx="7" fill="#ffffff" opacity="0.5"/>
+    
+    <!-- Tab details -->
+    <circle cx="10" cy="7" r="3.5" fill="#B94436"/>
+    <rect x="18" y="5" width="30" height="4" rx="2" fill="#B94436"/>
+    
+    <circle cx="14" cy="25" r="3.5" fill="#B94436"/>
+    <rect x="22" y="23" width="30" height="4" rx="2" fill="#B94436"/>
+    
+    <circle cx="18" cy="43" r="3.5" fill="#B94436"/>
+    <rect x="26" y="41" width="30" height="4" rx="2" fill="#B94436"/>
+  </g>
+  
+  <!-- Dock representation -->
+  <path d="M16 78 L112 78 Q120 78 120 86 L120 86 Q120 94 112 94 L16 94 Q8 94 8 86 L8 86 Q8 78 16 78 Z" 
+        fill="rgba(255,255,255,0.9)" stroke="#943326" stroke-width="2"/>
+  
+  <!-- Small favicons in dock -->
+  <circle cx="44" cy="86" r="4" fill="#B94436"/>
+  <circle cx="64" cy="86" r="6" fill="#B94436"/>
+  <circle cx="84" cy="86" r="4" fill="#B94436"/>
+</svg>

@@ -31,7 +31,7 @@
 
 .position-button {
   opacity: 0;
-  margin: 6px 6px 0px 3px;
+  margin: 6px 12px 0px 3px;
 }
 
 .position-button.visible {
@@ -192,7 +192,6 @@
 .tabs-list {
   border-radius: 8px;
   padding: 8px 4px 8px 8px;
-  max-height: 300px;
   width: 400px;
   overflow-y: auto;
   display: flex;
@@ -277,7 +276,7 @@
 
 /* Hover effect for the active favicon */
 .tab-group:hover .favicon {
-  transform: scale(1.4) translateY(-6px);
+  transform: scale(1.6) translateY(-6px);
 }
 
 /* Hover effect for the favicon immediately before the hovered one */

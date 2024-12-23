@@ -2,13 +2,15 @@ V1
 [X] Released!
 
 V2
-[-] Top and bottom position
+[X] Top and bottom position
 [X] Get only tabs from current window
-[ ] Improve tab loading (sometimes the favicon is missing)
-[ ] Improve mouse hover when diagonal move
+[X] Improve tab loading (sometimes the favicon is missing)
+[X] Handle full size for the list of tabs
+[X] New logo
+[-] Improve mouse hover when diagonal move
+
 
 V3
-[ ] New logo
 [ ] Display current app
 [ ] Dragover animation for both dragndrop
 [ ] Link deployment animation

@@ -501,7 +501,7 @@ class Dock {
             ? window.innerHeight - dockRect.bottom - 10  // Space below dock
             : dockRect.top - 10;  // Space above dock
 
-        dropdown.querySelector('.tabs-list').style.maxHeight = `${Math.min(300, availableSpace)}px`;
+        dropdown.querySelector('.tabs-list').style.maxHeight = `${availableSpace}px`;
     }
 
     #createTabGroup(domain, tabs) {
