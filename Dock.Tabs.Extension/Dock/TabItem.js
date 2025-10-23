@@ -13,6 +13,13 @@ class TabItem {
             this.browser = browser;
         }
 
+        // Store event handlers for cleanup
+        this.eventHandlers = {
+            drop: null,
+            dragstart: null,
+            dragend: null
+        };
+
         this.#createTabElement();
     }
 
@@ -38,6 +45,7 @@ class TabItem {
         closeButton.classList.add('close-button-icon');
         closeButton.src = this.browser.runtime.getURL("images/icons8-close.svg");
         closeButton.alt = 'Close tab';
+        closeButton.loading = 'lazy'; // Add lazy loading
         closeButtonContainer.appendChild(closeButton);
         fragment.appendChild(closeButtonContainer);
 
@@ -47,19 +55,47 @@ class TabItem {
     }
 
     onMove(onTabMoved) {
-        this.dom.tabItem.addEventListener('drop', onTabMoved);
+        this.eventHandlers.drop = onTabMoved;
+        this.dom.tabItem.addEventListener('drop', this.eventHandlers.drop);
     }
 
     onDragStart(onDragStarted) {
-        this.dom.tabItem.addEventListener('dragstart', onDragStarted);
+        this.eventHandlers.dragstart = onDragStarted;
+        this.dom.tabItem.addEventListener('dragstart', this.eventHandlers.dragstart);
     }
 
     onDragEnd(onDragEnded) {
-        this.dom.tabItem.addEventListener('dragend', onDragEnded);
+        this.eventHandlers.dragend = onDragEnded;
+        this.dom.tabItem.addEventListener('dragend', this.eventHandlers.dragend);
     }
 
     remove() {
-        this.dom.tabItem.remove();
+        // Remove event listeners
+        if (this.dom.tabItem) {
+            if (this.eventHandlers.drop) {
+                this.dom.tabItem.removeEventListener('drop', this.eventHandlers.drop);
+            }
+            if (this.eventHandlers.dragstart) {
+                this.dom.tabItem.removeEventListener('dragstart', this.eventHandlers.dragstart);
+            }
+            if (this.eventHandlers.dragend) {
+                this.dom.tabItem.removeEventListener('dragend', this.eventHandlers.dragend);
+            }
+            
+            this.dom.tabItem.remove();
+        }
+        
+        // Clear references
+        this.dom = null;
+        this.eventHandlers = null;
+        this.tab = null;
+        this.parent = null;
+        this.browser = null;
+    }
+    
+    // Add destroy alias for consistency
+    destroy() {
+        this.remove();
     }
 }
 

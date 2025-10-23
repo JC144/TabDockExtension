@@ -26,7 +26,8 @@ class Dock {
             downButton: null
         };
 
-        this.dockItems = [];
+        this.dockItems = {};  // Use object instead of array for better memory management
+        this.eventHandlers = {}; // Store event handlers for cleanup
 
         if (typeof browser === "undefined") {
             this.browser = chrome;
@@ -41,7 +42,17 @@ class Dock {
         this.#createPositionControls();
         this.#registerEvents();
 
-        window.addEventListener('resize', this.#adjustContainerWidth.bind(this));
+        // Store bound handlers for cleanup
+        this.boundHandlers = {
+            resize: this.#adjustContainerWidth.bind(this),
+            wheel: this.#handleWheel.bind(this),
+            mouseover: this.#handleHover.bind(this),
+            mouseout: this.#handleHoverOut.bind(this),
+            dropdownMouseover: this.#handleDropdownHover.bind(this),
+            dropdownMouseout: this.#handleDropdownHoverOut.bind(this)
+        };
+
+        window.addEventListener('resize', this.boundHandlers.resize);
 
         this.#addHorizontalScrolling();
         this.#addHoverBehavior();
@@ -91,7 +102,7 @@ class Dock {
 
         this.browser.runtime.sendMessage({
             action: 'updateTabOrder',
-            windowId: this.windowId,  // Include windowId in the message
+            windowId: this.windowId,
             newOrder: dockItemArr.map(item => ({
                 domain: item.domain,
                 tabIds: item.tabItems.map(tabItem => tabItem.tab.id)
@@ -99,7 +110,6 @@ class Dock {
         });
     }
 
-    // Update the message sending methods to include windowId
     #handleDockItemEvents(e) {
         const target = e.target.closest('.tab-group');
 
@@ -134,26 +144,71 @@ class Dock {
         }
     }
 
+    #handleWheel(event) {
+        if (event.deltaY !== 0) {
+            event.preventDefault();
+
+            const scrollAmount = event.deltaY * 2;
+            const currentScroll = this.dom.dockItemContainer.scrollLeft;
+            const maxScroll = this.dom.dockItemContainer.scrollWidth - this.dom.dockItemContainer.clientWidth;
+
+            let newScroll = currentScroll + scrollAmount;
+            newScroll = Math.max(0, Math.min(newScroll, maxScroll));
+
+            this.dom.dockItemContainer.scrollTo({
+                left: newScroll,
+                behavior: 'smooth'
+            });
+        }
+    }
+
+    #handleHover(event) {
+        const favicon = event.target.closest('.favicon');
+        if (favicon) {
+            const domain = favicon.dataset.domain;
+            this.#showDropdown(domain);
+        }
+    }
+
+    #handleHoverOut(event) {
+        const favicon = event.target.closest('.favicon');
+        if (favicon) {
+            const domain = favicon.dataset.domain;
+            this.#hideDropdown(domain);
+        }
+    }
+
+    #handleDropdownHover(event) {
+        const dropdown = event.target.closest('.dropdown-content');
+        if (dropdown) {
+            dropdown.classList.add('active');
+        }
+    }
+
+    #handleDropdownHoverOut(event) {
+        const dropdown = event.target.closest('.dropdown-content');
+        if (dropdown) {
+            dropdown.classList.remove('active');
+        }
+    }
+
     #createCloseButton() {
         this.dom.closeButton = document.createElement('div');
         this.dom.closeButton.className = 'interaction-button close-button';
-        this.dom.closeButton.innerHTML = '&#x2715;'; // Unicode for '×'
+        this.dom.closeButton.innerHTML = '&#x2715;';
         this.dom.closeButton.title = 'Close';
         this.dom.dockContainer.appendChild(this.dom.closeButton);
     }
 
     #registerCloseButtonEvents() {
-        this.dom.closeButton.addEventListener('click', () => {
-            this.#closeDock();
-        });
+        this.eventHandlers.closeButton = () => this.#closeDock();
+        this.dom.closeButton.addEventListener('click', this.eventHandlers.closeButton);
     }
 
     #createPositionControls() {
-        // Create container for position controls
         this.dom.positionControls = document.createElement('div');
         this.dom.positionControls.className = 'dock-position-controls';
 
-        // Create up button
         this.dom.upButton = document.createElement('div');
         this.dom.upButton.className = 'interaction-button position-button';
         this.dom.upButton.innerHTML = `
@@ -162,7 +217,6 @@ class Dock {
             </svg>
         `;
 
-        // Create down button
         this.dom.downButton = document.createElement('div');
         this.dom.downButton.className = 'interaction-button position-button';
         this.dom.downButton.innerHTML = `
@@ -189,13 +243,11 @@ class Dock {
     }
 
     #registerPositionControlEvents() {
-        this.dom.upButton.addEventListener('click', () => {
-            this.#moveDockTo('top');
-        });
-
-        this.dom.downButton.addEventListener('click', () => {
-            this.#moveDockTo('bottom');
-        });
+        this.eventHandlers.upButton = () => this.#moveDockTo('top');
+        this.eventHandlers.downButton = () => this.#moveDockTo('bottom');
+        
+        this.dom.upButton.addEventListener('click', this.eventHandlers.upButton);
+        this.dom.downButton.addEventListener('click', this.eventHandlers.downButton);
     }
 
     #moveDockTo(position) {
@@ -203,10 +255,8 @@ class Dock {
         this.state.position = position;
         const isTop = position === 'top';
         
-        // Only recreate if position actually changed
         if (wasTop !== isTop) {
             this.#recreateDropdowns();
-            // Save the new position
             this.#saveDockPosition(position);
         }
 
@@ -226,23 +276,18 @@ class Dock {
     }
 
     #recreateDropdowns() {
-        // Store the current dropdowns data
         const dropdownsData = Object.values(this.dockItems).map(dockItem => ({
             domain: dockItem.domain,
             tabs: dockItem.tabItems.map(item => item.tab)
         }));
 
-        // Remove all existing dropdowns
         this.dom.dropdownContainer.innerHTML = '';
 
-        // Recreate dropdowns with new structure
         dropdownsData.forEach(data => {
             const dockItem = this.dockItems[data.domain];
             if (dockItem) {
-                // Remove old dropdown
                 dockItem.dom.dropdown.remove();
                 
-                // Create new dropdown
                 dockItem.dom.dropdown = document.createElement('div');
                 dockItem.dom.dropdown.className = 'dropdown-content';
                 dockItem.dom.dropdown.dataset.domain = data.domain;
@@ -251,7 +296,6 @@ class Dock {
                 dockItem.dom.tabsList.className = 'tabs-list';
                 dockItem.dom.dropdown.appendChild(dockItem.dom.tabsList);
 
-                // Recreate tab items
                 data.tabs.forEach(tab => {
                     const tabItem = dockItem.tabItems.find(t => t.tab.id === tab.id);
                     if (tabItem) {
@@ -265,8 +309,7 @@ class Dock {
     }
 
     #closeDock() {
-        // Remove the dock from the DOM
-        this.dom.dock.remove();
+        this.destroy();
     }
 
     #adjustContainerWidth() {
@@ -276,26 +319,7 @@ class Dock {
     }
 
     #addHorizontalScrolling() {
-        this.dom.dockItemContainer.addEventListener('wheel', (event) => {
-            if (event.deltaY !== 0) {
-                event.preventDefault();
-
-                // Calculate the scroll amount
-                const scrollAmount = event.deltaY * 2;  // Adjust multiplier for desired scroll speed
-                const currentScroll = this.dom.dockItemContainer.scrollLeft;
-                const maxScroll = this.dom.dockItemContainer.scrollWidth - this.dom.dockItemContainer.clientWidth;
-
-                // Determine the new scroll position
-                let newScroll = currentScroll + scrollAmount;
-                newScroll = Math.max(0, Math.min(newScroll, maxScroll));
-
-                // Perform the smooth scroll
-                this.dom.dockItemContainer.scrollTo({
-                    left: newScroll,
-                    behavior: 'smooth'
-                });
-            }
-        });
+        this.dom.dockItemContainer.addEventListener('wheel', this.boundHandlers.wheel);
     }
 
     #createDock() {
@@ -358,12 +382,11 @@ class Dock {
                 this.dom.dock.style.transform = 'translate(-50%, 20px)';
                 this.#collapseDock();
             } else {
-                // Trigger a smooth transition when showing the dock
                 setTimeout(() => {
                     this.dom.dock.style.opacity = '1';
                     this.dom.dock.style.transform = 'translate(-50%, 0)';
                     this.expandDock();
-                }, 100); // Small delay to ensure transition works
+                }, 100);
             }
         }
     }
@@ -375,18 +398,19 @@ class Dock {
     #registerEvents() {
         this.#registerPositionControlEvents();
 
-        this.dom.dock.addEventListener('mouseover', e => {
+        this.eventHandlers.dockMouseover = e => {
             this.state.isOver = true;
             this.expandDock();
-        });
-        this.dom.dock.addEventListener('mouseleave', e => {
+        };
+        
+        this.eventHandlers.dockMouseleave = e => {
             this.state.isOver = false;
-        });
-
-        this.dom.dockItemContainer.addEventListener('click', this.#handleDockItemEvents.bind(this));
-        this.dom.dockItemContainer.addEventListener('mousedown', this.#handleDockItemEvents.bind(this));
-
-        document.addEventListener('mousemove', (e) => {
+        };
+        
+        this.eventHandlers.dockItemClick = this.#handleDockItemEvents.bind(this);
+        this.eventHandlers.dockItemMousedown = this.#handleDockItemEvents.bind(this);
+        
+        this.eventHandlers.documentMousemove = (e) => {
             if (this.state.isOpen && !this.state.isOver) {
                 if (this.state.position === 'bottom' && 
                     e.clientY < (window.innerHeight - (window.innerHeight * 0.1))) {
@@ -396,7 +420,13 @@ class Dock {
                     this.#collapseDock();
                 }
             }
-        });
+        };
+
+        this.dom.dock.addEventListener('mouseover', this.eventHandlers.dockMouseover);
+        this.dom.dock.addEventListener('mouseleave', this.eventHandlers.dockMouseleave);
+        this.dom.dockItemContainer.addEventListener('click', this.eventHandlers.dockItemClick);
+        this.dom.dockItemContainer.addEventListener('mousedown', this.eventHandlers.dockItemMousedown);
+        document.addEventListener('mousemove', this.eventHandlers.documentMousemove);
     }
 
     #collapseDock() {
@@ -423,35 +453,10 @@ class Dock {
     }
 
     #addHoverBehavior() {
-        this.dom.dockItemContainer.addEventListener('mouseover', (event) => {
-            const favicon = event.target.closest('.favicon');
-            if (favicon) {
-                const domain = favicon.dataset.domain;
-                this.#showDropdown(domain);
-            }
-        });
-
-        this.dom.dockItemContainer.addEventListener('mouseout', (event) => {
-            const favicon = event.target.closest('.favicon');
-            if (favicon) {
-                const domain = favicon.dataset.domain;
-                this.#hideDropdown(domain);
-            }
-        });
-
-        this.dom.dropdownContainer.addEventListener('mouseover', (event) => {
-            const dropdown = event.target.closest('.dropdown-content');
-            if (dropdown) {
-                dropdown.classList.add('active');
-            }
-        });
-
-        this.dom.dropdownContainer.addEventListener('mouseout', (event) => {
-            const dropdown = event.target.closest('.dropdown-content');
-            if (dropdown) {
-                dropdown.classList.remove('active');
-            }
-        });
+        this.dom.dockItemContainer.addEventListener('mouseover', this.boundHandlers.mouseover);
+        this.dom.dockItemContainer.addEventListener('mouseout', this.boundHandlers.mouseout);
+        this.dom.dropdownContainer.addEventListener('mouseover', this.boundHandlers.dropdownMouseover);
+        this.dom.dropdownContainer.addEventListener('mouseout', this.boundHandlers.dropdownMouseout);
     }
 
     #showDropdown(domain) {
@@ -482,24 +487,20 @@ class Dock {
         const marginOneSide = marginSide / 2;
         const dropDownRectHalfSized = (dropdownRect.width / 2);
 
-        // Calculate the left position
         let leftPosition = faviconRect.left - dockRect.left + faviconRect.width / 2;
 
-        // Check if the dropdown would overflow on the left side
         if ((marginOneSide - dropDownRectHalfSized) + leftPosition < 0) {
             leftPosition = 0 - (marginOneSide - dropDownRectHalfSized);
         }
-        // Check if the dropdown would overflow on the right side
         else if (marginOneSide + dockRect.width + (dropDownRectHalfSized - (dockRect.width - leftPosition)) > window.innerWidth) {
             leftPosition = (window.innerWidth - (marginOneSide + dockRect.width + (dropDownRectHalfSized - (dockRect.width - leftPosition))) + leftPosition);
         }
 
         dropdown.style.left = `${leftPosition}px`;
 
-        // Set max-height based on available space
         const availableSpace = this.state.position === 'top' 
-            ? window.innerHeight - dockRect.bottom - 10  // Space below dock
-            : dockRect.top - 10;  // Space above dock
+            ? window.innerHeight - dockRect.bottom - 10
+            : dockRect.top - 10;
 
         dropdown.querySelector('.tabs-list').style.maxHeight = `${availableSpace}px`;
     }
@@ -548,15 +549,9 @@ class Dock {
 
     removeDockItem(domain) {
         if (this.dockItems[domain]) {
-            this.dockItems[domain].remove();
+            this.dockItems[domain].destroy();
+            delete this.dockItems[domain];
         }
-        let nDockItems = [];
-        Object.values(this.dockItems).forEach((e) => {
-            if (e.domain != domain) {
-                nDockItems[e.domain] = e;
-            }
-        });
-        this.dockItems = nDockItems;
     }
 
     #reorderArray(arr, oldIndex, newIndex) {
@@ -564,7 +559,7 @@ class Dock {
     }
 
     #recreateDockItems(dockItemArr) {
-        let nDockItems = [];
+        let nDockItems = {};
         for (let i = 0; i < dockItemArr.length; i++) {
             nDockItems[dockItemArr[i].domain] = dockItemArr[i];
         }
@@ -583,7 +578,7 @@ class Dock {
     update(tabData) {
         let hasBeenModified = false;
 
-        //Remove from dock, items that have been removed from other docks
+        // Remove items that are no longer present
         for (const domain in this.dockItems) {
             if (!tabData.find(d => d.domain == domain) || this.dockItems[domain] === undefined || this.dockItems[domain].length == 0) {
                 this.removeDockItem(domain);
@@ -591,7 +586,7 @@ class Dock {
             }
         }
 
-        //Insert new item in the dock
+        // Insert new items
         for (const tabDataIndex in tabData) {
             const domainData = tabData[tabDataIndex];
             if (this.dockItems[domainData.domain] === undefined) {
@@ -600,7 +595,7 @@ class Dock {
             }
         }
 
-        //Reorder the dock
+        // Update and reorder
         const dockItemArr = Object.values(this.dockItems);
         for (const tabDataIndex in tabData) {
             const domainData = tabData[tabDataIndex];
@@ -627,9 +622,6 @@ class Dock {
             }
         }
 
-        //If the dock items have been modified
-        //Save the order
-        //And reorder the dom
         if (hasBeenModified) {
             this.#recreateDockItems(dockItemArr);
             this.reorderDom(dockItemArr);
@@ -638,37 +630,68 @@ class Dock {
 
     destroy() {
         // Remove all event listeners
-        window.removeEventListener('resize', this.#adjustContainerWidth.bind(this));
+        if (this.boundHandlers) {
+            window.removeEventListener('resize', this.boundHandlers.resize);
+            
+            if (this.dom.dockItemContainer) {
+                this.dom.dockItemContainer.removeEventListener('wheel', this.boundHandlers.wheel);
+                this.dom.dockItemContainer.removeEventListener('mouseover', this.boundHandlers.mouseover);
+                this.dom.dockItemContainer.removeEventListener('mouseout', this.boundHandlers.mouseout);
+                this.dom.dockItemContainer.removeEventListener('click', this.eventHandlers.dockItemClick);
+                this.dom.dockItemContainer.removeEventListener('mousedown', this.eventHandlers.dockItemMousedown);
+            }
+            
+            if (this.dom.dropdownContainer) {
+                this.dom.dropdownContainer.removeEventListener('mouseover', this.boundHandlers.dropdownMouseover);
+                this.dom.dropdownContainer.removeEventListener('mouseout', this.boundHandlers.dropdownMouseout);
+            }
+        }
         
-        // Clean up DOM elements
+        if (this.eventHandlers) {
+            if (this.dom.dock) {
+                this.dom.dock.removeEventListener('mouseover', this.eventHandlers.dockMouseover);
+                this.dom.dock.removeEventListener('mouseleave', this.eventHandlers.dockMouseleave);
+            }
+            
+            if (this.dom.upButton) {
+                this.dom.upButton.removeEventListener('click', this.eventHandlers.upButton);
+            }
+            
+            if (this.dom.downButton) {
+                this.dom.downButton.removeEventListener('click', this.eventHandlers.downButton);
+            }
+            
+            if (this.dom.closeButton) {
+                this.dom.closeButton.removeEventListener('click', this.eventHandlers.closeButton);
+            }
+            
+            document.removeEventListener('mousemove', this.eventHandlers.documentMousemove);
+        }
+    
+        // Clear all items with proper cleanup
+        for (const domain in this.dockItems) {
+            if (this.dockItems[domain]) {
+                this.dockItems[domain].destroy();
+            }
+        }
+        
+        // Remove DOM elements
         if (this.dom.dock) {
+            const shadow = this.dom.dock.shadowRoot;
+            if (shadow) {
+                shadow.innerHTML = '';
+            }
             this.dom.dock.remove();
         }
     
-        // Clear all items
-        for (const domain in this.dockItems) {
-            if (this.dockItems[domain]) {
-                this.dockItems[domain].remove();
-            }
-        }
-        this.dockItems = [];
-    
-        // Clear DOM references
-        this.dom = {
-            dock: null,
-            dockContainer: null,
-            dockItemContainer: null,
-            dockBackground: null,
-            dropdownContainer: null,
-            closeButton: null
-        };
-    
-        // Reset state
-        this.state = {
-            isOver: false,
-            isOpen: false,
-            draggedDockItem: null
-        };
+        // Clear all references for garbage collection
+        this.dockItems = null;
+        this.dom = null;
+        this.state = null;
+        this.browser = null;
+        this.windowId = null;
+        this.eventHandlers = null;
+        this.boundHandlers = null;
     }
 }
 

@@ -28,6 +28,16 @@ class DockItem {
             this.browser = browser;
         }
 
+        // Store event handlers for cleanup
+        this.eventHandlers = {
+            click: null,
+            mousedown: null,
+            dragover: null,
+            drop: null,
+            dragstart: null,
+            dragend: null
+        };
+
         this.#createDockItem(tabs);
         this.#registerEvents();
     }
@@ -41,6 +51,7 @@ class DockItem {
         this.dom.favicon.className = 'favicon';
         this.dom.favicon.alt = this.domain;
         this.dom.favicon.dataset.domain = this.domain;
+        this.dom.favicon.loading = 'lazy'; // Add lazy loading
 
         this.setFaviconSrc(tabs[0].favicon);
 
@@ -55,18 +66,33 @@ class DockItem {
         this.dom.tabsList.className = 'tabs-list';
         this.dom.dropdown.appendChild(this.dom.tabsList);
 
-        tabs.forEach((tab) => {
+        // Only create visible tabs initially
+        const maxInitialTabs = 10;
+        tabs.slice(0, maxInitialTabs).forEach((tab) => {
             this.createTabItem(tab);
         });
+
+        // Lazy load remaining tabs
+        if (tabs.length > maxInitialTabs) {
+            setTimeout(() => {
+                tabs.slice(maxInitialTabs).forEach((tab) => {
+                    this.createTabItem(tab);
+                });
+            }, 100);
+        }
     }
 
     #registerEvents() {
-        this.dom.dropdown.addEventListener('click', this.#handleTabItemEvents.bind(this));
-        this.dom.dropdown.addEventListener('mousedown', this.#handleTabItemEvents.bind(this));
-        this.dom.button.addEventListener('dragover', (e) => {
+        // Store event handlers for cleanup
+        this.eventHandlers.click = this.#handleTabItemEvents.bind(this);
+        this.eventHandlers.mousedown = this.#handleTabItemEvents.bind(this);
+        this.eventHandlers.dragover = (e) => {
             e.preventDefault();
-            //TODO: Add movement animation
-        });
+        };
+
+        this.dom.dropdown.addEventListener('click', this.eventHandlers.click);
+        this.dom.dropdown.addEventListener('mousedown', this.eventHandlers.mousedown);
+        this.dom.button.addEventListener('dragover', this.eventHandlers.dragover);
     }
 
     #handleTabItemEvents(e) {
@@ -106,10 +132,10 @@ class DockItem {
     }
 
     update(updatedTabs) {
-        //TODO find why this.tabItems has some undefined values
+        // Filter out undefined values
         this.tabItems = this.tabItems.filter(t => t !== undefined);
 
-        //Compare if a tab is in dockObject.tabData but not in tabData
+        // Compare if a tab is in dockObject.tabData but not in tabData
         let removedTabItems = this.tabItems.filter(tabItem => !updatedTabs.map(t => t.id).includes(tabItem.tab.id));
         if (removedTabItems.length > 0) {
             removedTabItems.forEach(tabItem => {
@@ -117,7 +143,7 @@ class DockItem {
             });
         }
 
-        //Compare if a tab is in tabData but not in dockObject.tabData
+        // Compare if a tab is in tabData but not in dockObject.tabData
         let newTabs = updatedTabs.filter(tab => !this.tabItems.map(tabItem => tabItem.tab.id).includes(tab.id));
         if (newTabs.length > 0) {
             newTabs.forEach(tab => {
@@ -127,15 +153,18 @@ class DockItem {
     }
 
     onMove(onButtonMoved) {
-        this.dom.button.addEventListener('drop', onButtonMoved);
+        this.eventHandlers.drop = onButtonMoved;
+        this.dom.button.addEventListener('drop', this.eventHandlers.drop);
     }
 
     onDragStart(onDragStarted) {
-        this.dom.button.addEventListener('dragstart', onDragStarted);
+        this.eventHandlers.dragstart = onDragStarted;
+        this.dom.button.addEventListener('dragstart', this.eventHandlers.dragstart);
     }
 
     onDragEnd(onDragEnded) {
-        this.dom.button.addEventListener('dragend', onDragEnded);
+        this.eventHandlers.dragend = onDragEnded;
+        this.dom.button.addEventListener('dragend', this.eventHandlers.dragend);
     }
 
     createTabItem(tab) {
@@ -182,13 +211,51 @@ class DockItem {
 
     removeTabItem(tabId) {
         let tabItem = this.tabItems.find(t => t.tab.id == tabId);
-        this.tabItems.splice(this.tabItems.indexOf(tabItem), 1);
-        tabItem.remove();
+        if (tabItem) {
+            this.tabItems.splice(this.tabItems.indexOf(tabItem), 1);
+            tabItem.destroy();
+        }
     }
 
-    remove() {        
-        this.dom.button.remove();
+    remove() {
+        // Clean up event listeners
+        if (this.dom.dropdown) {
+            this.dom.dropdown.removeEventListener('click', this.eventHandlers.click);
+            this.dom.dropdown.removeEventListener('mousedown', this.eventHandlers.mousedown);
+        }
+        
+        if (this.dom.button) {
+            this.dom.button.removeEventListener('dragover', this.eventHandlers.dragover);
+            if (this.eventHandlers.drop) {
+                this.dom.button.removeEventListener('drop', this.eventHandlers.drop);
+            }
+            if (this.eventHandlers.dragstart) {
+                this.dom.button.removeEventListener('dragstart', this.eventHandlers.dragstart);
+            }
+            if (this.eventHandlers.dragend) {
+                this.dom.button.removeEventListener('dragend', this.eventHandlers.dragend);
+            }
+            this.dom.button.remove();
+        }
+        
+        if (this.dom.dropdown) {
+            this.dom.dropdown.remove();
+        }
+        
+        // Clean up tab items
+        this.tabItems.forEach(tabItem => {
+            if (tabItem && tabItem.destroy) {
+                tabItem.destroy();
+            }
+        });
+        
         this.tabItems = [];
+        this.eventHandlers = null;
+    }
+
+    // Alias for compatibility
+    destroy() {
+        this.remove();
     }
 
     startFaviconAnimation() {

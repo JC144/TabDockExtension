@@ -6,8 +6,12 @@ class Main {
         this.initialized = false;
         this.storageListener = null;
         this.messageListener = null;
+        this.visibilityListener = null;
         this.dock = null;
         this.currentWindowId = null;
+        this.tabDataCache = null;
+        this.lastUpdateTime = 0;
+        this.updateThrottle = 500; // Throttle updates to 500ms
 
         let checkDocumentState = setInterval(() => {
             if (document.readyState === "complete" || document.readyState === "loaded") {
@@ -21,16 +25,14 @@ class Main {
         // Request window ID from background script
         await this.#getWindowId();
 
-        // Register visibility change event first
-        document.addEventListener('visibilitychange', this.#handleVisibilityChange.bind(this));
+        // Register visibility change event
+        this.visibilityListener = this.#handleVisibilityChange.bind(this);
+        document.addEventListener('visibilitychange', this.visibilityListener);
         
         // Only initialize if the document is visible
         if (document.visibilityState === 'visible') {
             this.#initializeDock();
         }
-
-        this.#registerEvents();
-        this.#loadTabs();
     }
 
     async #getWindowId() {
@@ -81,19 +83,27 @@ class Main {
                 this.dock = null;
             }
             this.initialized = false;
+            this.tabDataCache = null;
+            this.lastUpdateTime = 0;
         }
     }
 
     #handleVisibilityChange() {
         if (document.visibilityState === 'visible') {
-            this.#initializeDock();
+            if (!this.initialized) {
+                this.#initializeDock();
+            }
         } else {
-            this.#cleanupDock();
+            // Don't cleanup immediately - dock might still be in use
+            setTimeout(() => {
+                if (document.visibilityState !== 'visible' && this.dock && !this.dock.state.isOver) {
+                    this.#cleanupDock();
+                }
+            }, 1000);
         }
     }
 
     #registerEvents() {
-        // Existing storage and message listeners
         this.storageListener = this.#handleStorageChange.bind(this);
         this.messageListener = this.#handleMessage.bind(this);
 
@@ -115,7 +125,8 @@ class Main {
             if (this.dock) {
                 this.dock.setWindowId(newWindowId);
                 
-                // Reload tabs for the new window
+                // Clear cache to force reload
+                this.tabDataCache = null;
                 await this.#loadTabs();
             }
         }
@@ -131,14 +142,39 @@ class Main {
             this.browser.runtime.onMessage.removeListener(this.messageListener);
             this.messageListener = null;
         }
+
+        if (this.visibilityListener) {
+            document.removeEventListener('visibilitychange', this.visibilityListener);
+            this.visibilityListener = null;
+        }
     }
 
     #handleStorageChange(changes, area) {
+        // Throttle updates
+        const now = Date.now();
+        if (now - this.lastUpdateTime < this.updateThrottle) {
+            return;
+        }
+        this.lastUpdateTime = now;
+
         if (area === 'local' && changes.tabData && this.dock) {
             // Get only the current window's tab data
             const windowTabData = changes.tabData.newValue[this.currentWindowId] || [];
-            this.dock.update(windowTabData);
+            
+            // Only update if data actually changed
+            if (this.#hasDataChanged(windowTabData)) {
+                this.tabDataCache = windowTabData;
+                this.dock.update(windowTabData);
+            }
         }
+    }
+
+    #hasDataChanged(newData) {
+        if (!this.tabDataCache) return true;
+        if (this.tabDataCache.length !== newData.length) return true;
+        
+        // Simple comparison - could be optimized further
+        return JSON.stringify(this.tabDataCache) !== JSON.stringify(newData);
     }
 
     #handleMessage(message) {
@@ -167,11 +203,17 @@ class Main {
                 if (data.tabData && this.currentWindowId) {
                     // Get only the current window's tab data
                     const windowTabData = data.tabData[this.currentWindowId] || [];
+                    this.tabDataCache = windowTabData;
                     this.dock.update(windowTabData);
                 }
                 resolve(data.tabData || {});
             });
         });
+    }
+
+    // Public cleanup method for content script to call
+    cleanup() {
+        this.#cleanupDock();
     }
 }
 
