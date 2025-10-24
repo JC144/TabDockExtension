@@ -17,7 +17,9 @@ class TabItem {
         this.eventHandlers = {
             drop: null,
             dragstart: null,
-            dragend: null
+            dragend: null,
+            dragover: null,
+            dragenter: null
         };
 
         this.#createTabElement();
@@ -69,6 +71,16 @@ class TabItem {
         this.dom.tabItem.addEventListener('dragend', this.eventHandlers.dragend);
     }
 
+    onDragOver(onDragOver) {
+        this.eventHandlers.dragover = onDragOver;
+        this.dom.tabItem.addEventListener('dragover', this.eventHandlers.dragover);
+    }
+
+    onDragEnter(onDragEnter) {
+        this.eventHandlers.dragenter = onDragEnter;
+        this.dom.tabItem.addEventListener('dragenter', this.eventHandlers.dragenter);
+    }
+
     remove() {
         // Remove event listeners
         if (this.dom.tabItem) {
@@ -80,6 +92,12 @@ class TabItem {
             }
             if (this.eventHandlers.dragend) {
                 this.dom.tabItem.removeEventListener('dragend', this.eventHandlers.dragend);
+            }
+            if (this.eventHandlers.dragover) {
+                this.dom.tabItem.removeEventListener('dragover', this.eventHandlers.dragover);
+            }
+            if (this.eventHandlers.dragenter) {
+                this.dom.tabItem.removeEventListener('dragenter', this.eventHandlers.dragenter);
             }
             
             this.dom.tabItem.remove();

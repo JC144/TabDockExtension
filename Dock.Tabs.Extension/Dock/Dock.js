@@ -11,7 +11,8 @@ class Dock {
             isOpen: true,
             draggedDockItem: null,
             isLoading: true,
-            position: 'bottom'
+            position: 'bottom',
+            hasAnimated: false
         };
 
         this.dom = {
@@ -60,6 +61,9 @@ class Dock {
         this.#createCloseButton();
         this.#registerCloseButtonEvents();
 
+        // Listen for tab changes to update current website indicator
+        this.#registerTabChangeListener();
+
         if (this.state.position === 'top') {
             this.#moveDockTo(this.state.position);
         }
@@ -98,7 +102,12 @@ class Dock {
 
         this.#recreateDockItems(dockItemArr);
 
-        this.browser.storage.local.set({ tabData: tabData });
+        // Store tab data per window
+        this.browser.storage.local.get('tabData', (result) => {
+            const allTabData = result.tabData || {};
+            allTabData[this.windowId] = tabData;
+            this.browser.storage.local.set({ tabData: allTabData });
+        });
 
         this.browser.runtime.sendMessage({
             action: 'updateTabOrder',
@@ -386,6 +395,15 @@ class Dock {
                     this.dom.dock.style.opacity = '1';
                     this.dom.dock.style.transform = 'translate(-50%, 0)';
                     this.expandDock();
+                    
+                    // Trigger animation for dock items after dock appears
+                    setTimeout(() => {
+                        this.#animateDockItemsSequentially();
+                        // Update current website indicator after animation
+                        setTimeout(() => {
+                            this.#updateCurrentWebsiteIndicator();
+                        }, 100);
+                    }, 200);
                 }, 100);
             }
         }
@@ -547,6 +565,38 @@ class Dock {
         this.dockItems[domain].startFaviconAnimation();
     }
 
+    #animateDockItemsSequentially() {
+        // Only animate once per dock initialization
+        if (this.state.hasAnimated) return;
+        this.state.hasAnimated = true;
+        
+        const dockItemElements = Array.from(this.dom.dockItemContainer.querySelectorAll('.tab-group'));
+        
+        // Set initial state for all items
+        dockItemElements.forEach(element => {
+            element.classList.add('dock-item-initial');
+        });
+
+        // Animate each item with a smooth delay
+        dockItemElements.forEach((element, index) => {
+            setTimeout(() => {
+                // Skip animation if item is being dragged
+                if (element.classList.contains('dragging')) {
+                    element.classList.remove('dock-item-initial');
+                    return;
+                }
+                
+                element.classList.remove('dock-item-initial');
+                element.classList.add('pop-in');
+                
+                // Remove animation class after animation completes
+                setTimeout(() => {
+                    element.classList.remove('pop-in');
+                }, 800);
+            }, index * 80); // 80ms delay between each item for smoother wave effect
+        });
+    }
+
     removeDockItem(domain) {
         if (this.dockItems[domain]) {
             this.dockItems[domain].destroy();
@@ -587,12 +637,22 @@ class Dock {
         }
 
         // Insert new items
+        let hasNewItems = false;
         for (const tabDataIndex in tabData) {
             const domainData = tabData[tabDataIndex];
             if (this.dockItems[domainData.domain] === undefined) {
                 this.#insertNewDockItem(tabData, domainData.domain);
                 hasBeenModified = true;
+                hasNewItems = true;
             }
+        }
+
+        // Trigger animation for new items if this is the initial load
+        if (hasNewItems && Object.keys(this.dockItems).length === tabData.length) {
+            // Small delay to ensure DOM is updated
+            setTimeout(() => {
+                this.#animateDockItemsSequentially();
+            }, 50);
         }
 
         // Update and reorder
@@ -622,10 +682,51 @@ class Dock {
             }
         }
 
+        // Update current website indicator
+        this.#updateCurrentWebsiteIndicator();
+
         if (hasBeenModified) {
             this.#recreateDockItems(dockItemArr);
             this.reorderDom(dockItemArr);
         }
+    }
+
+    #updateCurrentWebsiteIndicator() {
+        // Request current tab info from background script
+        this.browser.runtime.sendMessage({ 
+            action: 'getCurrentTabInfo',
+            windowId: this.windowId 
+        }, (response) => {
+            if (response && response.url) {
+                const currentDomain = this.#extractDomain(response.url);
+                
+                // Update all dock items
+                Object.values(this.dockItems).forEach(dockItem => {
+                    const isCurrent = dockItem.domain === currentDomain;
+                    dockItem.setCurrentWebsite(isCurrent);
+                });
+            } else {
+                console.warn('No response or URL from getCurrentTabInfo');
+            }
+        });
+    }
+
+    #extractDomain(url) {
+        try {
+            const urlObj = new URL(url);
+            return urlObj.hostname;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    #registerTabChangeListener() {
+        // Listen for messages from background script about tab changes
+        this.browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (message.action === 'tabChanged' && message.windowId === this.windowId) {
+                this.#updateCurrentWebsiteIndicator();
+            }
+        });
     }
 
     destroy() {

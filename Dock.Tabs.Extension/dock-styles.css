@@ -87,7 +87,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  height: 38px;
+  height: 48px;
   background: rgba(83, 83, 83, 0.25);
   backdrop-filter: blur(13px);
   -webkit-backdrop-filter: blur(13px);
@@ -111,6 +111,7 @@
   max-width: 100%;
   align-items: flex-end;
   height: 64px;
+  padding-bottom: 12px;
   transition: all 0.2s ease;
   white-space: nowrap;
   overflow-y: hidden;
@@ -124,6 +125,19 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+  will-change: transform, opacity;
+  cursor: grab;
+}
+
+.tab-group:active {
+  cursor: grabbing;
+}
+
+.tab-group.dragging {
+  opacity: 0.7;
+  transform: scale(1.1);
+  z-index: 1000;
+  cursor: grabbing;
 }
 
 .favicon {
@@ -133,6 +147,28 @@
   cursor: default;
   object-fit: cover;
   transition: all 0.2s ease;
+}
+
+/* Current website indicator dot container */
+.current-website-indicator {
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 6px;
+  height: 6px;
+  background-color: #007AFF;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  box-shadow: 0 0 8px rgba(0, 122, 255, 0.6);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Show indicator for current website */
+.current-website-indicator.active {
+  opacity: 1;
 }
 
 .dropdown-container {
@@ -268,10 +304,29 @@
   height: auto;
   padding: 8px;
   margin-top: 2px;
-  cursor: default;
+  cursor: grab;
   border-radius: 8px;
   display: flex;
   align-items: center;
+  transition: all 0.2s ease;
+}
+
+.tab-item:active {
+  cursor: grabbing;
+}
+
+.tab-item.dragging {
+  opacity: 0.7;
+  transform: scale(1.05);
+  z-index: 1000;
+  cursor: grabbing;
+  background-color: rgba(83, 83, 83, 0.95);
+}
+
+/* Drop zone feedback for tab items */
+.tab-item:not(.dragging):hover {
+  background-color: rgba(100, 100, 100, 0.9);
+  transform: translateY(-1px);
 }
 
 /* Hover effect for the active favicon */
@@ -319,10 +374,7 @@
   vertical-align: middle;
 }
 
-.tab-item.dragging {
-  opacity: 0.5;
-  cursor: move;
-}
+/* This rule is now handled above with better styling */
 
 .tab-item:not(.dragging) {
   transition: transform 0.2s ease-in-out;
@@ -391,4 +443,57 @@
 
 .jump {
   animation: jump 0.5s;
+}
+
+@keyframes popIn {
+  0% {
+    transform: scale(0) translateY(40px);
+    opacity: 0;
+  }
+  15% {
+    transform: scale(0.3) translateY(25px);
+    opacity: 0.3;
+  }
+  35% {
+    transform: scale(1.2) translateY(-5px);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(0.9) translateY(2px);
+    opacity: 0.95;
+  }
+  65% {
+    transform: scale(1.05) translateY(-1px);
+    opacity: 1;
+  }
+  80% {
+    transform: scale(0.98) translateY(0.5px);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+.pop-in {
+  animation: popIn 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+
+/* Initial state for dock items before animation */
+.dock-item-initial {
+  transform: scale(0) translateY(40px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Ensure dragging works even during animation */
+.dock-item-initial.dragging,
+.pop-in.dragging {
+  pointer-events: auto;
+  transform: scale(1) translateY(0) !important;
+  opacity: 1 !important;
 }

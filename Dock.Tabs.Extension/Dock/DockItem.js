@@ -10,7 +10,8 @@ class DockItem {
             button: null,
             favicon: null,
             dropdown: null,
-            tabsList: null
+            tabsList: null,
+            indicator: null
         };
 
         this.state = {
@@ -44,8 +45,9 @@ class DockItem {
 
     #createDockItem(tabs) {
         this.dom.button = document.createElement('div');
-        this.dom.button.className = 'tab-group';
+        this.dom.button.className = 'tab-group dock-item-initial';
         this.dom.button.dataset.domain = this.domain;
+        this.dom.button.style.position = 'relative'; // Ensure positioning for indicator
 
         this.dom.favicon = document.createElement('img');
         this.dom.favicon.className = 'favicon';
@@ -55,8 +57,13 @@ class DockItem {
 
         this.setFaviconSrc(tabs[0].favicon);
 
+        // Create current website indicator dot
+        this.dom.indicator = document.createElement('div');
+        this.dom.indicator.className = 'current-website-indicator';
+
         this.dom.button.setAttribute('draggable', true);
         this.dom.button.appendChild(this.dom.favicon);
+        this.dom.button.appendChild(this.dom.indicator);
 
         this.dom.dropdown = document.createElement('div');
         this.dom.dropdown.className = 'dropdown-content';
@@ -88,11 +95,16 @@ class DockItem {
         this.eventHandlers.mousedown = this.#handleTabItemEvents.bind(this);
         this.eventHandlers.dragover = (e) => {
             e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        };
+        this.eventHandlers.dragenter = (e) => {
+            e.preventDefault();
         };
 
         this.dom.dropdown.addEventListener('click', this.eventHandlers.click);
         this.dom.dropdown.addEventListener('mousedown', this.eventHandlers.mousedown);
         this.dom.button.addEventListener('dragover', this.eventHandlers.dragover);
+        this.dom.button.addEventListener('dragenter', this.eventHandlers.dragenter);
     }
 
     #handleTabItemEvents(e) {
@@ -199,6 +211,15 @@ class DockItem {
                 this.parent.saveState();
             }
         });
+
+        tabItem.onDragOver((e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        });
+
+        tabItem.onDragEnter((e) => {
+            e.preventDefault();
+        });
     }
 
     reorderDom() {
@@ -226,6 +247,7 @@ class DockItem {
         
         if (this.dom.button) {
             this.dom.button.removeEventListener('dragover', this.eventHandlers.dragover);
+            this.dom.button.removeEventListener('dragenter', this.eventHandlers.dragenter);
             if (this.eventHandlers.drop) {
                 this.dom.button.removeEventListener('drop', this.eventHandlers.drop);
             }
@@ -269,6 +291,16 @@ class DockItem {
             faviconSrc = this.browser.runtime.getURL("images/default_favicon.png");
         }
         this.dom.favicon.src = faviconSrc;
+    }
+
+    setCurrentWebsite(isCurrent) {
+        if (this.dom.indicator) {
+            if (isCurrent) {
+                this.dom.indicator.classList.add('active');
+            } else {
+                this.dom.indicator.classList.remove('active');
+            }
+        }
     }
 }
 

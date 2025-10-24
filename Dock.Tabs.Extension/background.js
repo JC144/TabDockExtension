@@ -110,10 +110,47 @@ class Background {
     this.browser.tabs.onUpdated.addListener(async(tabId, info, tab) => await this.#onTabUpdated(tabId, info, tab));
     this.browser.tabs.onAttached.addListener((tabId, attachInfo) => this.#handleTabAttached(tabId, attachInfo));
     this.browser.tabs.onDetached.addListener((tabId, detachInfo) => this.#handleTabDetached(tabId, detachInfo));
+    
+    // Tab activation event - notify content script when tab becomes active
+    this.browser.tabs.onActivated.addListener((activeInfo) => {
+      // Send message to the newly activated tab
+      this.browser.tabs.sendMessage(activeInfo.tabId, { 
+        action: 'tabActivated' 
+      }).catch(() => {
+        // Ignore errors - content script might not be injected yet
+      });
+
+      // Notify all tabs in the same window about tab change for current website indicator
+      this.browser.tabs.query({ windowId: activeInfo.windowId }, (tabs) => {
+        tabs.forEach(tab => {
+          this.browser.tabs.sendMessage(tab.id, {
+            action: 'tabChanged',
+            windowId: activeInfo.windowId
+          }).catch(() => {
+            // Ignore errors - content script might not be injected
+          });
+        });
+      });
+    });
 
     // Window events
     this.browser.windows.onCreated.addListener((window) => this.#handleNewWindow(window));
     this.browser.windows.onRemoved.addListener((windowId) => this.#handleWindowRemoved(windowId));
+    
+    // Window focus change - notify active tab in focused window
+    this.browser.windows.onFocusChanged.addListener((windowId) => {
+      if (windowId !== this.browser.windows.WINDOW_ID_NONE) {
+        this.browser.tabs.query({ active: true, windowId: windowId }, (tabs) => {
+          if (tabs[0]) {
+            this.browser.tabs.sendMessage(tabs[0].id, { 
+              action: 'windowFocused' 
+            }).catch(() => {
+              // Ignore errors if content script not ready
+            });
+          }
+        });
+      }
+    });
 
     this.browser.runtime.onMessage.addListener(this.#onMessageReceived.bind(this));
   }
@@ -185,6 +222,20 @@ class Background {
     // Only update on significant changes
     if (info.status === 'complete' || info.url || info.title) {
       await this.#updateTab(tab);
+      
+      // If URL changed and this is the active tab, notify about tab change
+      if (info.url && tab.active) {
+        this.browser.tabs.query({ windowId: tab.windowId }, (tabs) => {
+          tabs.forEach(tabInWindow => {
+            this.browser.tabs.sendMessage(tabInWindow.id, {
+              action: 'tabChanged',
+              windowId: tab.windowId
+            }).catch(() => {
+              // Ignore errors - content script might not be injected
+            });
+          });
+        });
+      }
     }
   }
 
@@ -212,6 +263,21 @@ class Background {
           sendResponse({ windowId: sender.tab.windowId });
         }
         break;
+      case 'getTabId':
+        if (sender) {
+          sendResponse({ tabId: sender.tab.id });
+        }
+        break;
+      case 'dockLoaded':
+        // Track which tab has the dock loaded
+        this.currentDockTabId = message.tabId || sender.tab.id;
+        break;
+      case 'dockUnloaded':
+        // Clear the tracking
+        if (this.currentDockTabId === sender.tab.id) {
+          this.currentDockTabId = null;
+        }
+        break;
       case 'focusTab':
         this.browser.tabs.update(message.tabId, { active: true });
         this.browser.tabs.sendMessage(message.tabId, { action: 'expandDock' });
@@ -236,6 +302,15 @@ class Background {
       case 'updateTabOrder':
         this.#updateTabOrder(message.windowId, message.newOrder);
         break;
+      case 'getCurrentTabInfo':
+        this.browser.tabs.query({ active: true, windowId: message.windowId }, (tabs) => {
+          if (tabs && tabs.length > 0) {
+            sendResponse({ url: tabs[0].url });
+          } else {
+            sendResponse({ url: null });
+          }
+        });
+        return true; // Keep message channel open for async response
     }
   }
 
