@@ -1,455 +1,316 @@
-class FaviconCache {
-  constructor(maxSize = 50) {
-    this.cache = new Map();
-    this.maxSize = maxSize;
-    this.browser = typeof browser === "undefined" ? chrome : browser;
-  }
-
-  async getFavicon(url) {
-    const domain = new URL(url).hostname;
-    
-    if (!this.cache.has(domain)) {
-      const favicon = await this.#fetchFavicon(url);
-      this.#addToCache(domain, favicon);
-    }
-    
-    return this.cache.get(domain);
-  }
-
-  #addToCache(domain, favicon) {
-    // Implement LRU cache
-    if (this.cache.size >= this.maxSize) {
-      const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
-    }
-    this.cache.set(domain, favicon);
-  }
-
-  async #fetchFavicon(url) {
-    let favIconUrl = new URL(this.browser.runtime.getURL("/_favicon/"));
-    favIconUrl.searchParams.set("pageUrl", url);
-    favIconUrl.searchParams.set("size", "32");
-    
-    try {
-      const response = await fetch(favIconUrl.toString());
-      if (response.ok && response.headers.get('Content-Type')?.startsWith('image/')) {
-        return favIconUrl.toString();
-      }
-    } catch (error) {
-      console.error('Failed to fetch favicon:', error);
-    }
-    
-    return this.browser.runtime.getURL("images/default_favicon.png");
-  }
-
-  clear() {
-    this.cache.clear();
-  }
-}
+// background.js is not a module (MV2 background page), so the browser-api.js shim is duplicated here.
+const api = (typeof browser !== 'undefined') ? browser : chrome;
+const isMV3 = api.runtime.getManifest().manifest_version === 3;
 
 class Background {
-  #updateTimeout;
-  #faviconCache;
-  #cleanupInterval;
+  #saveTimer = null;
+  // Firefox only: source URL -> Promise<data: URL | null>, one fetch per icon
+  // per session. Rebuilt empty on every background restart.
+  #faviconCache = new Map();
+  // Firefox only: favicons already resolved in a previous session, restored by
+  // domain when #reconcile re-creates the domain entries.
+  #storedFavicons = new Map();
 
   constructor() {
-    if (typeof browser === "undefined") {
-      this.browser = chrome;
-    }
-    else {
-      this.browser = browser;
-    }
-
-    this.windowTabData = new Map();
-    this.#faviconCache = new FaviconCache();
-    this.#initialize();
-    
-    // Periodic cleanup every 5 minutes
-    this.#cleanupInterval = setInterval(() => {
-      this.#performCleanup();
-    }, 5 * 60 * 1000);
-  }
-
-  async #initialize() {
-    await this.#initializeWindows();
+    this.tabData = [];
+    // MV3 service workers must register their listeners synchronously in the
+    // first event-loop turn, or the event that woke the worker is dropped.
+    // Handlers await this.ready so they run against the reconciled tabData.
+    this.ready = this.#initialize();
     this.#registerEvents();
   }
 
-  async #initializeWindows() {
-    const windows = await this.browser.windows.getAll();
-
-    for (const window of windows) {
-      const tabs = await this.browser.tabs.query({ windowId: window.id });
-      this.windowTabData.set(window.id, []);
-
-      // Process tabs in batches to avoid blocking
-      const batchSize = 10;
-      for (let i = 0; i < tabs.length; i += batchSize) {
-        const batch = tabs.slice(i, i + batchSize);
-        await Promise.all(batch.map(tab => this.#updateTab(tab)));
+  async #initialize() {
+    let storedTabData = [];
+    try {
+      const data = await api.storage.local.get('tabData');
+      if (Array.isArray(data.tabData)) {
+        storedTabData = data.tabData;
       }
+    } catch (e) {
+      // Corrupt or unreadable storage: start from the live tabs only.
+    }
 
-      // Send window ID to content script when it's injected
-      if (tabs[0]?.id) {
-        this.browser.tabs.sendMessage(tabs[0].id, {
-          action: 'setWindowId',
-          windowId: window.id
-        }).catch(() => {
-          // Ignore errors - content script might not be ready yet
-        });
+    const liveTabs = await api.tabs.query({});
+    this.#reconcile(storedTabData, liveTabs);
+    this.#saveTabData();
+  }
+
+  // Rebuild tabData from the live tabs while preserving the stored domain order
+  // and intra-domain tab order. Tab ids change across browser restarts, so stored
+  // tabs are re-matched by id first, then by url. Also migrates the old schema
+  // (per-tab favicon, possibly a large data: URI) to the per-domain one.
+  #reconcile(storedTabData, liveTabs) {
+    // Only data: values are restorable (the old schema stored raw http URLs,
+    // which must be re-resolved); faviconSource is needed to detect staleness.
+    for (const domainData of storedTabData) {
+      if (domainData && typeof domainData.favicon === 'string'
+        && domainData.favicon.startsWith('data:') && domainData.faviconSource) {
+        this.#storedFavicons.set(domainData.domain, { favicon: domainData.favicon, faviconSource: domainData.faviconSource });
       }
     }
 
-    this.#saveTabData();
+    const unclaimed = liveTabs.filter(t => t && t.url);
+    const claim = (predicate) => {
+      const index = unclaimed.findIndex(predicate);
+      return index === -1 ? null : unclaimed.splice(index, 1)[0];
+    };
+
+    for (const domainData of storedTabData) {
+      if (!domainData || !Array.isArray(domainData.tabs)) continue;
+      for (const storedTab of domainData.tabs) {
+        const liveTab = claim(t => t.id === storedTab.id && this.#getHostname(t.url) === domainData.domain)
+          || claim(t => t.url === storedTab.url);
+        if (liveTab) {
+          this.#upsertTab(liveTab);
+        }
+      }
+    }
+
+    for (const liveTab of [...unclaimed]) {
+      this.#upsertTab(liveTab);
+    }
   }
 
   #registerEvents() {
-    // Tab events
-    this.browser.tabs.onCreated.addListener(async (tab) => await this.#updateTab(tab));
-    this.browser.tabs.onRemoved.addListener((tabId, removeInfo) => this.#removeTab(tabId, removeInfo.windowId));
-    this.browser.tabs.onUpdated.addListener(async(tabId, info, tab) => await this.#onTabUpdated(tabId, info, tab));
-    this.browser.tabs.onAttached.addListener((tabId, attachInfo) => this.#handleTabAttached(tabId, attachInfo));
-    this.browser.tabs.onDetached.addListener((tabId, detachInfo) => this.#handleTabDetached(tabId, detachInfo));
-    
-    // Tab activation event - notify content script when tab becomes active
-    this.browser.tabs.onActivated.addListener((activeInfo) => {
-      // Send message to the newly activated tab
-      this.browser.tabs.sendMessage(activeInfo.tabId, { 
-        action: 'tabActivated' 
-      }).catch(() => {
-        // Ignore errors - content script might not be injected yet
-      });
-
-      // Notify all tabs in the same window about tab change for current website indicator
-      this.browser.tabs.query({ windowId: activeInfo.windowId }, (tabs) => {
-        tabs.forEach(tab => {
-          this.browser.tabs.sendMessage(tab.id, {
-            action: 'tabChanged',
-            windowId: activeInfo.windowId
-          }).catch(() => {
-            // Ignore errors - content script might not be injected
-          });
-        });
-      });
+    // The listeners return undefined (not a promise) so the message channel is
+    // never mistaken for a pending response; the work is queued behind init.
+    api.tabs.onCreated.addListener((tab) => { this.ready.then(() => this.#upsertTab(tab)); });
+    api.tabs.onRemoved.addListener((tabId) => { this.ready.then(() => this.#removeTab(tabId)); });
+    api.tabs.onUpdated.addListener((tabId, info, tab) => { this.ready.then(() => this.#onTabUpdated(tabId, info, tab)); });
+    // A tab dragged to another window fires onAttached (not onUpdated), so the
+    // stored windowId must be refreshed from the live tab. The tab's content
+    // script cached its windowId at load, so it must be told about the move
+    // (it may not be injected on that page: ignore the send error).
+    api.tabs.onAttached.addListener((tabId, attachInfo) => {
+      this.ready.then(() => api.tabs.get(tabId).then(tab => this.#upsertTab(tab)).catch(() => {}));
+      api.tabs.sendMessage(tabId, { action: 'windowChanged', windowId: attachInfo.newWindowId }).catch(() => {});
     });
-
-    // Window events
-    this.browser.windows.onCreated.addListener((window) => this.#handleNewWindow(window));
-    this.browser.windows.onRemoved.addListener((windowId) => this.#handleWindowRemoved(windowId));
-    
-    // Window focus change - notify active tab in focused window
-    this.browser.windows.onFocusChanged.addListener((windowId) => {
-      if (windowId !== this.browser.windows.WINDOW_ID_NONE) {
-        this.browser.tabs.query({ active: true, windowId: windowId }, (tabs) => {
-          if (tabs[0]) {
-            this.browser.tabs.sendMessage(tabs[0].id, { 
-              action: 'windowFocused' 
-            }).catch(() => {
-              // Ignore errors if content script not ready
-            });
-          }
-        });
+    api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.action === 'getWindowId') {
+        // Answered synchronously; the channel is not kept open.
+        sendResponse({ windowId: sender.tab ? sender.tab.windowId : undefined });
+        return;
       }
+      this.ready.then(() => this.#onMessageReceived(message));
     });
-
-    this.browser.runtime.onMessage.addListener(this.#onMessageReceived.bind(this));
   }
 
-  async #handleTabAttached(tabId, attachInfo) {
-    const tab = await this.browser.tabs.get(tabId);
-    const domain = new URL(tab.url).hostname;
-
-    // Remove from old window
-    const oldWindowTabs = this.windowTabData.get(attachInfo.oldWindowId);
-    if (oldWindowTabs) {
-      const domainData = oldWindowTabs.find(d => d.domain === domain);
-      if (domainData) {
-        domainData.tabs = domainData.tabs.filter(t => t.id !== tabId);
-        
-        if (domainData.tabs.length === 0) {
-          const domainIndex = oldWindowTabs.indexOf(domainData);
-          oldWindowTabs.splice(domainIndex, 1);
-        }
-      }
-    }
-
-    // Add to new window
-    await this.#updateTab(tab);
-    this.#saveTabData();
-
-    // Notify content script
-    try {
-      await this.browser.tabs.sendMessage(tabId, {
-        action: 'windowChanged',
-        windowId: attachInfo.newWindowId
-      });
-    } catch (error) {
-      // Ignore errors
+  #onTabUpdated(tabId, info, tab) {
+    // Firefox often reports favIconUrl in a separate event after 'complete',
+    // so a favicon arrival must also trigger an upsert. Title changes arrive
+    // on their own too (SPAs updating document.title long after 'complete').
+    if (info.status === 'complete' || info.favIconUrl || info.title) {
+      this.#upsertTab(tab);
     }
   }
 
-  #handleTabDetached(tabId, detachInfo) {
-    const oldWindowTabs = this.windowTabData.get(detachInfo.oldWindowId);
-    if (oldWindowTabs) {
-      for (const domainData of oldWindowTabs) {
-        const tabIndex = domainData.tabs.findIndex(t => t.id === tabId);
-        if (tabIndex !== -1) {
-          domainData.tabs.splice(tabIndex, 1);
-          
-          if (domainData.tabs.length === 0) {
-            const domainIndex = oldWindowTabs.indexOf(domainData);
-            oldWindowTabs.splice(domainIndex, 1);
-          }
-          break;
-        }
-      }
-      
-      this.#saveTabData();
-    }
-  }
+  // Merge, don't replace: newOrder comes from one window's dock and only covers
+  // the domains/tabs visible there. Mentioned entries are reordered within the
+  // slots they already occupy; everything else keeps its position.
+  #updateTabOrder(newOrder) {
+    const orderedDomains = newOrder
+      .map(item => this.tabData.find(d => d.domain === item.domain))
+      .filter(Boolean);
+    const mentionedDomains = new Set(orderedDomains.map(d => d.domain));
+    let domainSlot = 0;
+    this.tabData = this.tabData.map(d => mentionedDomains.has(d.domain) ? orderedDomains[domainSlot++] : d);
 
-  #handleNewWindow(window) {
-    this.windowTabData.set(window.id, []);
+    for (const item of newOrder) {
+      const domainData = this.tabData.find(d => d.domain === item.domain);
+      if (!domainData) continue;
+      const orderedTabs = item.tabIds
+        .map(id => domainData.tabs.find(t => t.id === id))
+        .filter(Boolean);
+      const mentionedIds = new Set(orderedTabs.map(t => t.id));
+      let tabSlot = 0;
+      domainData.tabs = domainData.tabs.map(t => mentionedIds.has(t.id) ? orderedTabs[tabSlot++] : t);
+    }
+
     this.#saveTabData();
   }
 
-  #handleWindowRemoved(windowId) {
-    this.windowTabData.delete(windowId);
-    this.#saveTabData();
-  }
-
-  async #onTabUpdated(tabId, info, tab) {
-    // Only update on significant changes
-    if (info.status === 'complete' || info.url || info.title) {
-      await this.#updateTab(tab);
-      
-      // If URL changed and this is the active tab, notify about tab change
-      if (info.url && tab.active) {
-        this.browser.tabs.query({ windowId: tab.windowId }, (tabs) => {
-          tabs.forEach(tabInWindow => {
-            this.browser.tabs.sendMessage(tabInWindow.id, {
-              action: 'tabChanged',
-              windowId: tab.windowId
-            }).catch(() => {
-              // Ignore errors - content script might not be injected
-            });
-          });
-        });
-      }
-    }
-  }
-
-  #updateTabOrder(windowId, newOrder) {
-    const windowTabs = this.windowTabData.get(windowId);
-    if (!windowTabs) return;
-
-    const orderedTabData = newOrder.map(item => {
-      const domainData = windowTabs.find(d => d.domain === item.domain);
-      if (domainData) {
-        const orderedTabs = item.tabIds.map(id => domainData.tabs.find(t => t.id === id)).filter(Boolean);
-        return { ...domainData, tabs: orderedTabs };
-      }
-      return null;
-    }).filter(Boolean);
-
-    this.windowTabData.set(windowId, orderedTabData);
-    this.#debouncedSaveTabData();
-  }
-
-  #onMessageReceived(message, sender, sendResponse) {
+  #onMessageReceived(message) {
     switch (message.action) {
-      case 'getWindowId':
-        if (sender) {
-          sendResponse({ windowId: sender.tab.windowId });
-        }
-        break;
-      case 'getTabId':
-        if (sender) {
-          sendResponse({ tabId: sender.tab.id });
-        }
-        break;
-      case 'dockLoaded':
-        // Track which tab has the dock loaded
-        this.currentDockTabId = message.tabId || sender.tab.id;
-        break;
-      case 'dockUnloaded':
-        // Clear the tracking
-        if (this.currentDockTabId === sender.tab.id) {
-          this.currentDockTabId = null;
-        }
-        break;
       case 'focusTab':
-        this.browser.tabs.update(message.tabId, { active: true });
-        this.browser.tabs.sendMessage(message.tabId, { action: 'expandDock' });
+        // Also focus the window: the tab may live in another one (the dock
+        // shows every window's tabs when the content script's windowId is unknown).
+        api.tabs.update(message.tabId, { active: true })
+          .then(tab => api.windows.update(tab.windowId, { focused: true }))
+          .catch(() => {});
+        api.tabs.sendMessage(message.tabId, { action: 'expandDock' });
         break;
       case 'openTab':
-        this.browser.tabs.create({
-          url: message.tabUri,
-          active: false,
-          windowId: message.windowId
-        });
+        api.tabs.create({ url: message.tabUri, active: false });
         break;
       case 'closeTab':
-        this.browser.tabs.remove(message.tabId);
+        api.tabs.remove(message.tabId);
         break;
       case 'openAndNavigateToTab':
-        this.browser.tabs.create({
-          url: message.tabUri,
-          active: true,
-          windowId: message.windowId
-        });
+        api.tabs.create({ url: message.tabUri, active: true });
         break;
       case 'updateTabOrder':
-        this.#updateTabOrder(message.windowId, message.newOrder);
+        this.#updateTabOrder(message.newOrder);
         break;
-      case 'getCurrentTabInfo':
-        this.browser.tabs.query({ active: true, windowId: message.windowId }, (tabs) => {
-          if (tabs && tabs.length > 0) {
-            sendResponse({ url: tabs[0].url });
-          } else {
-            sendResponse({ url: null });
-          }
-        });
-        return true; // Keep message channel open for async response
     }
   }
 
-  #removeTab(tabId, windowId) {
-    const windowTabs = this.windowTabData.get(windowId);
-    if (!windowTabs) return;
+  #getHostname(url) {
+    try {
+      return new URL(url).hostname;
+    } catch (e) {
+      return null;
+    }
+  }
 
-    for (const domainData of windowTabs) {
+  #getFaviconURL(u, version) {
+    let favIconUrl = new URL(api.runtime.getURL("/_favicon/"));
+    favIconUrl.searchParams.set("pageUrl", u);
+    favIconUrl.searchParams.set("size", "32");
+    // Ignored by the _favicon endpoint; only there to make the URL string
+    // differ so the dock <img> refetches (see #applyDomainFavicon).
+    if (version) favIconUrl.searchParams.set("v", version);
+
+    return favIconUrl.toString();
+  }
+
+  // One favicon per domain. On Chrome the _favicon endpoint gives a ~120-byte URL
+  // that also bypasses the host pages' CSP. Firefox has no _favicon endpoint and
+  // pages' CSP applies to content-script <img> loads, so the background fetches
+  // the icon itself (host permissions bypass CSP/CORS here) and stores a small
+  // 32x32 PNG data: URL that the dock draws onto a canvas.
+  #applyDomainFavicon(domainData, tab) {
+    if (isMV3) {
+      // _favicon serves the default globe until Chrome has downloaded the
+      // site's real icon, and the recomputed URL is byte-identical after the
+      // later favIconUrl onUpdated event, so the dock's <img> would never
+      // refetch. Bump a version when the tab's favIconUrl changes to force it.
+      if (!domainData.favicon || domainData.faviconSource !== tab.favIconUrl) {
+        domainData.faviconSource = tab.favIconUrl;
+        domainData.faviconVersion = (domainData.faviconVersion || 0) + 1;
+      }
+      domainData.favicon = this.#getFaviconURL(tab.url, domainData.faviconVersion);
+      return;
+    }
+    if (!tab.favIconUrl) return;
+    if (domainData.faviconSource === tab.favIconUrl && domainData.favicon) return;
+    domainData.faviconSource = tab.favIconUrl;
+    this.#resolveFavicon(tab.favIconUrl).then(dataUrl => {
+      // The domain may have been removed or its source superseded meanwhile.
+      const live = this.tabData.find(d => d.domain === domainData.domain);
+      if (!live || live.faviconSource !== tab.favIconUrl) return;
+      live.favicon = dataUrl; // null falls back to the default icon in the UI
+      this.#saveTabData();
+    });
+  }
+
+  #resolveFavicon(source) {
+    let promise = this.#faviconCache.get(source);
+    if (!promise) {
+      promise = this.#rasterize(source).catch(() => null);
+      this.#faviconCache.set(source, promise);
+    }
+    return promise;
+  }
+
+  // Normalizes any favicon (ico/svg/oversized data: URI) into a 32x32 PNG the
+  // content script can always decode. Image + DOM canvas require the persistent
+  // MV2 background page; an MV3/event-page port must switch to
+  // createImageBitmap + OffscreenCanvas.
+  async #rasterize(source) {
+    let objectUrl = null;
+    try {
+      let src = source;
+      if (source.startsWith('data:')) {
+        if (source.length > 1024 * 1024) return null;
+      } else {
+        const response = await fetch(source, { credentials: 'omit' });
+        if (!response.ok) return null;
+        const blob = await response.blob();
+        if (blob.size > 512 * 1024) return null;
+        objectUrl = URL.createObjectURL(blob);
+        src = objectUrl;
+      }
+      const img = await new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = src;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 32;
+      canvas.getContext('2d').drawImage(img, 0, 0, 32, 32);
+      return canvas.toDataURL('image/png');
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  #removeTab(tabId) {
+    for (const domainData of this.tabData) {
       const tabIndex = domainData.tabs.findIndex(t => t.id === tabId);
       if (tabIndex !== -1) {
         domainData.tabs.splice(tabIndex, 1);
-        if (domainData.tabs.length === 0) {
-          const domainIndex = windowTabs.indexOf(domainData);
-          windowTabs.splice(domainIndex, 1);
-        }
-        break;
       }
     }
-
-    this.#debouncedSaveTabData();
+    this.tabData = this.tabData.filter(d => d.tabs.length !== 0);
+    this.#saveTabData();
   }
 
-  async #updateTab(tab) {
-    if (!tab?.url || !tab.windowId) return;
+  #upsertTab(tab) {
+    if (!tab || !tab.url) return;
+    const hostname = this.#getHostname(tab.url);
+    if (!hostname) return;
 
-    let windowTabs = this.windowTabData.get(tab.windowId);
-    if (!windowTabs) {
-      windowTabs = [];
-      this.windowTabData.set(tab.windowId, windowTabs);
+    // A tab that navigated to another domain must leave its previous one.
+    for (const domainData of this.tabData) {
+      if (domainData.domain === hostname) continue;
+      const tabIndex = domainData.tabs.findIndex(t => t.id === tab.id);
+      if (tabIndex !== -1) {
+        domainData.tabs.splice(tabIndex, 1);
+      }
     }
+    this.tabData = this.tabData.filter(d => d.tabs.length !== 0);
 
-    const domain = new URL(tab.url).hostname;
-    let domainData = windowTabs.find(d => d.domain === domain);
-
+    let domainData = this.tabData.find(d => d.domain === hostname);
     if (!domainData) {
-      domainData = {
-        domain: domain,
-        tabs: []
-      };
-      windowTabs.push(domainData);
+      // New domains go to the end of tabData
+      domainData = { domain: hostname, favicon: null, tabs: [] };
+      const stored = this.#storedFavicons.get(hostname);
+      if (stored) {
+        domainData.favicon = stored.favicon;
+        domainData.faviconSource = stored.faviconSource;
+      }
+      this.tabData.push(domainData);
     }
 
-    // Use cached favicon or get new one
-    const faviconUrl = tab.favIconUrl || await this.#faviconCache.getFavicon(tab.url);
-
-    // Store minimal data
-    const tabData = {
-      id: tab.id,
-      url: tab.url,
-      title: tab.title ? tab.title.substring(0, 100) : '', // Limit title length
-      favicon: faviconUrl
-    };
-
-    const existingTabIndex = domainData.tabs.findIndex(t => t.id === tab.id);
-    if (existingTabIndex === -1) {
-      domainData.tabs.push(tabData);
+    const existingTab = domainData.tabs.find(t => t.id === tab.id);
+    if (existingTab) {
+      existingTab.url = tab.url;
+      existingTab.title = tab.title;
+      existingTab.windowId = tab.windowId;
     } else {
-      // Keep old favicon if new one isn't available
-      if (!tabData.favicon) {
-        tabData.favicon = domainData.tabs[existingTabIndex].favicon;
-      }
-      domainData.tabs[existingTabIndex] = tabData;
+      // New tabs go to the end of the domain's tab list
+      domainData.tabs.push({ id: tab.id, url: tab.url, title: tab.title, windowId: tab.windowId });
     }
 
-    this.#debouncedSaveTabData();
+    // The dock shows the first tab's favicon for the whole domain; any tab may
+    // supply it while the domain has none (favIconUrl timing varies per tab).
+    if (domainData.tabs[0].id === tab.id || !domainData.favicon) {
+      this.#applyDomainFavicon(domainData, tab);
+    }
+
+    this.#saveTabData();
   }
 
-  #debouncedSaveTabData() {
-    clearTimeout(this.#updateTimeout);
-    this.#updateTimeout = setTimeout(() => {
-      this.#saveTabData();
-    }, 1000);
-  }
-
+  // Trailing debounce: coalesces event bursts (e.g. every tab firing onUpdated at
+  // browser startup) into a single storage write, i.e. one broadcast to all pages.
   #saveTabData() {
-    // Convert Map to object for storage
-    const tabDataObject = {};
-    for (const [windowId, tabs] of this.windowTabData.entries()) {
-      // Only save windows that have tabs
-      if (tabs.length > 0) {
-        // Create a minimal copy for storage
-        tabDataObject[windowId] = tabs.map(domainData => ({
-          domain: domainData.domain,
-          tabs: domainData.tabs.map(tab => ({
-            id: tab.id,
-            url: tab.url,
-            title: tab.title,
-            favicon: tab.favicon
-          }))
-        }));
-      }
-    }
-    
-    // Use local storage with size check
-    this.browser.storage.local.set({ tabData: tabDataObject }, () => {
-      if (this.browser.runtime.lastError) {
-        console.error('Storage error:', this.browser.runtime.lastError);
-        // Clear cache and retry if storage fails
-        this.#performCleanup();
-        this.browser.storage.local.set({ tabData: tabDataObject });
-      }
-    });
-  }
-
-  #performCleanup() {
-    // Clean up closed windows
-    this.browser.windows.getAll().then(windows => {
-      const windowIds = new Set(windows.map(w => w.id));
-      for (const [windowId] of this.windowTabData) {
-        if (!windowIds.has(windowId)) {
-          this.windowTabData.delete(windowId);
-        }
-      }
-    });
-
-    // Clear favicon cache periodically
-    if (this.#faviconCache.cache.size > 40) {
-      this.#faviconCache.clear();
-    }
-
-    // Verify tab data integrity
-    for (const [windowId, tabs] of this.windowTabData) {
-      // Remove any invalid entries
-      const validTabs = tabs.filter(domainData => 
-        domainData.domain && domainData.tabs && domainData.tabs.length > 0
-      );
-      this.windowTabData.set(windowId, validTabs);
-    }
-  }
-
-  destroy() {
-    if (this.#cleanupInterval) {
-      clearInterval(this.#cleanupInterval);
-    }
-    if (this.#updateTimeout) {
-      clearTimeout(this.#updateTimeout);
-    }
-    this.#faviconCache.clear();
-    this.windowTabData.clear();
+    clearTimeout(this.#saveTimer);
+    this.#saveTimer = setTimeout(() => {
+      api.storage.local.set({ tabData: this.tabData });
+    }, 150);
   }
 }
 

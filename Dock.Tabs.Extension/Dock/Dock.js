@@ -1,348 +1,69 @@
 import DockItem from './DockItem.js';
+import { attachDragReorder } from './DragReorder.js';
+import { api } from '../browser-api.js';
+
+// Proximity magnification: how far (px) the effect reaches from the cursor,
+// peak scale boost (1 + MAX_BOOST) and peak upward lift (px).
+const MAGNIFY_RADIUS = 120;
+const MAGNIFY_MAX_BOOST = 0.4;
+const MAGNIFY_MAX_LIFT = 6;
 
 class Dock {
-    constructor() {
-        this.#initialize();
+    constructor(initialPosition = 'bottom') {
+        this.#initialize(initialPosition);
     }
 
-    async #initialize() {
+    #initialize(initialPosition) {
         this.state = {
             isOver: false,
             isOpen: true,
-            draggedDockItem: null,
-            isLoading: true,
-            position: 'bottom',
-            hasAnimated: false
+            // 'bottom' or 'top': which window edge the dock is anchored to
+            position: initialPosition === 'top' ? 'top' : 'bottom',
+            isDraggingDock: false,
+            // Set when the dock was dropped on the trash zone: gone from this
+            // page until the next reload
+            removed: false,
+            // True while a pointer-drag reorders dock icons or tab rows;
+            // suspends magnification, auto-collapse and dropdown opening.
+            isReordering: false,
+            // tabData that arrived mid-reorder, replayed by endReorder()
+            pendingUpdate: null,
+            // At most one dropdown has its rows mounted per page
+            mountedDockItem: null,
+            magnifyFrame: null,
+            mouseX: 0
         };
 
         this.dom = {
             dock: null,
-            dockContainer: null,
+            grip: null,
+            trash: null,
             dockItemContainer: null,
-            dockBackground: null,
-            dropdownContainer: null,
-            closeButton: null,
-            positionControls: null,
-            upButton: null,
-            downButton: null
         };
 
-        this.dockItems = {};  // Use object instead of array for better memory management
-        this.eventHandlers = {}; // Store event handlers for cleanup
-
-        if (typeof browser === "undefined") {
-            this.browser = chrome;
-        }
-        else {
-            this.browser = browser;
-        }
-
-        await this.#loadSavedPosition();
+        // domain -> DockItem. Order is never stored here: it derives from tabData
+        // on update(), and from the DOM when persisting a drag.
+        this.dockItems = new Map();
 
         this.#createDock();
-        this.#createPositionControls();
         this.#registerEvents();
-
-        // Store bound handlers for cleanup
-        this.boundHandlers = {
-            resize: this.#adjustContainerWidth.bind(this),
-            wheel: this.#handleWheel.bind(this),
-            mouseover: this.#handleHover.bind(this),
-            mouseout: this.#handleHoverOut.bind(this),
-            dropdownMouseover: this.#handleDropdownHover.bind(this),
-            dropdownMouseout: this.#handleDropdownHoverOut.bind(this)
-        };
-
-        window.addEventListener('resize', this.boundHandlers.resize);
-
-        this.#addHorizontalScrolling();
-        this.#addHoverBehavior();
-
-        this.#createCloseButton();
-        this.#registerCloseButtonEvents();
-
-        // Listen for tab changes to update current website indicator
-        this.#registerTabChangeListener();
-
-        if (this.state.position === 'top') {
-            this.#moveDockTo(this.state.position);
-        }
-    }
-
-    async #loadSavedPosition() {
-        return new Promise((resolve) => {
-            this.browser.storage.local.get('dockPosition', (result) => {
-                if (result.dockPosition) {
-                    this.state.position = result.dockPosition;
-                }
-                resolve();
-            });
-        });
-    }
-
-    #saveDockPosition(position) {
-        this.browser.storage.local.set({ dockPosition: position });
-    }
-
-    setWindowId(windowId) {
-        this.windowId = windowId;
-    }
-
-    saveState() {
-        const dockItemArr = Object.values(this.dockItems);
-        this.#saveState(dockItemArr);
-    }
-
-    #saveState(dockItemArr) {
-        let tabData = [];
-
-        dockItemArr.forEach(dockItem => {
-            tabData.push({ domain: dockItem.domain, tabs: dockItem.tabItems.map(t => t.tab) });
-        });
-
-        this.#recreateDockItems(dockItemArr);
-
-        // Store tab data per window
-        this.browser.storage.local.get('tabData', (result) => {
-            const allTabData = result.tabData || {};
-            allTabData[this.windowId] = tabData;
-            this.browser.storage.local.set({ tabData: allTabData });
-        });
-
-        this.browser.runtime.sendMessage({
-            action: 'updateTabOrder',
-            windowId: this.windowId,
-            newOrder: dockItemArr.map(item => ({
-                domain: item.domain,
-                tabIds: item.tabItems.map(tabItem => tabItem.tab.id)
-            }))
-        });
-    }
-
-    #handleDockItemEvents(e) {
-        const target = e.target.closest('.tab-group');
-
-        if (target) {
-            const domain = target.dataset.domain;
-            const dockItem = this.dockItems[domain];
-
-            if (dockItem) {
-                switch (e.type) {
-                    case 'click':
-                        if (e.target.closest('.favicon')) {
-                            e.preventDefault();
-                            this.browser.runtime.sendMessage({ 
-                                action: 'openTab', 
-                                tabUri: dockItem.tabItems[0].tab.url,
-                                windowId: this.windowId
-                            });
-                        }
-                        break;
-                    case 'mousedown':
-                        if (e.target.closest('.favicon') && e.button === 1) {
-                            e.preventDefault();
-                            this.browser.runtime.sendMessage({ 
-                                action: 'openAndNavigateToTab', 
-                                tabUri: dockItem.tabItems[0].tab.url,
-                                windowId: this.windowId
-                            });
-                        }
-                        break;
-                }
-            }
-        }
-    }
-
-    #handleWheel(event) {
-        if (event.deltaY !== 0) {
-            event.preventDefault();
-
-            const scrollAmount = event.deltaY * 2;
-            const currentScroll = this.dom.dockItemContainer.scrollLeft;
-            const maxScroll = this.dom.dockItemContainer.scrollWidth - this.dom.dockItemContainer.clientWidth;
-
-            let newScroll = currentScroll + scrollAmount;
-            newScroll = Math.max(0, Math.min(newScroll, maxScroll));
-
-            this.dom.dockItemContainer.scrollTo({
-                left: newScroll,
-                behavior: 'smooth'
-            });
-        }
-    }
-
-    #handleHover(event) {
-        const favicon = event.target.closest('.favicon');
-        if (favicon) {
-            const domain = favicon.dataset.domain;
-            this.#showDropdown(domain);
-        }
-    }
-
-    #handleHoverOut(event) {
-        const favicon = event.target.closest('.favicon');
-        if (favicon) {
-            const domain = favicon.dataset.domain;
-            this.#hideDropdown(domain);
-        }
-    }
-
-    #handleDropdownHover(event) {
-        const dropdown = event.target.closest('.dropdown-content');
-        if (dropdown) {
-            dropdown.classList.add('active');
-        }
-    }
-
-    #handleDropdownHoverOut(event) {
-        const dropdown = event.target.closest('.dropdown-content');
-        if (dropdown) {
-            dropdown.classList.remove('active');
-        }
-    }
-
-    #createCloseButton() {
-        this.dom.closeButton = document.createElement('div');
-        this.dom.closeButton.className = 'interaction-button close-button';
-        this.dom.closeButton.innerHTML = '&#x2715;';
-        this.dom.closeButton.title = 'Close';
-        this.dom.dockContainer.appendChild(this.dom.closeButton);
-    }
-
-    #registerCloseButtonEvents() {
-        this.eventHandlers.closeButton = () => this.#closeDock();
-        this.dom.closeButton.addEventListener('click', this.eventHandlers.closeButton);
-    }
-
-    #createPositionControls() {
-        this.dom.positionControls = document.createElement('div');
-        this.dom.positionControls.className = 'dock-position-controls';
-
-        this.dom.upButton = document.createElement('div');
-        this.dom.upButton.className = 'interaction-button position-button';
-        this.dom.upButton.innerHTML = `
-            <svg viewBox="0 0 28 28" style="margin: 1px 0px 0px 2px;">
-                <path d="M12 4l-8 8h16l-8-8z" fill="black"/>
-            </svg>
-        `;
-
-        this.dom.downButton = document.createElement('div');
-        this.dom.downButton.className = 'interaction-button position-button';
-        this.dom.downButton.innerHTML = `
-            <svg viewBox="0 0 28 28" style="margin: 0px 0px 3px 2px;">
-                <path d="M12 20l-8-8h16l-8 8z" fill="black"/>
-            </svg>
-        `;
-
-        this.dom.positionControls.appendChild(this.dom.upButton);
-        this.dom.positionControls.appendChild(this.dom.downButton);
-        this.dom.dockItemContainer.appendChild(this.dom.positionControls);
-
-        this.#updatePositionButtons();
-    }
-
-    #updatePositionButtons() {
-        if (this.state.position === 'bottom') {
-            this.dom.upButton.classList.add('visible');
-            this.dom.downButton.classList.remove('visible');
-        } else {
-            this.dom.upButton.classList.remove('visible');
-            this.dom.downButton.classList.add('visible');
-        }
-    }
-
-    #registerPositionControlEvents() {
-        this.eventHandlers.upButton = () => this.#moveDockTo('top');
-        this.eventHandlers.downButton = () => this.#moveDockTo('bottom');
-        
-        this.dom.upButton.addEventListener('click', this.eventHandlers.upButton);
-        this.dom.downButton.addEventListener('click', this.eventHandlers.downButton);
-    }
-
-    #moveDockTo(position) {
-        const wasTop = this.state.position === 'top';
-        this.state.position = position;
-        const isTop = position === 'top';
-        
-        if (wasTop !== isTop) {
-            this.#recreateDropdowns();
-            this.#saveDockPosition(position);
-        }
-
-        this.dom.dock.classList.toggle('top', isTop);
-        this.dom.dockContainer.classList.toggle('top', isTop);
-        this.dom.dropdownContainer.classList.toggle('top', isTop);
-        
-        if (isTop) {
-            this.dom.dock.style.bottom = 'auto';
-            this.dom.dock.style.top = '10px';
-        } else {
-            this.dom.dock.style.top = 'auto';
-            this.dom.dock.style.bottom = '10px';
-        }
-
-        this.#updatePositionButtons();
-    }
-
-    #recreateDropdowns() {
-        const dropdownsData = Object.values(this.dockItems).map(dockItem => ({
-            domain: dockItem.domain,
-            tabs: dockItem.tabItems.map(item => item.tab)
-        }));
-
-        this.dom.dropdownContainer.innerHTML = '';
-
-        dropdownsData.forEach(data => {
-            const dockItem = this.dockItems[data.domain];
-            if (dockItem) {
-                dockItem.dom.dropdown.remove();
-                
-                dockItem.dom.dropdown = document.createElement('div');
-                dockItem.dom.dropdown.className = 'dropdown-content';
-                dockItem.dom.dropdown.dataset.domain = data.domain;
-
-                dockItem.dom.tabsList = document.createElement('div');
-                dockItem.dom.tabsList.className = 'tabs-list';
-                dockItem.dom.dropdown.appendChild(dockItem.dom.tabsList);
-
-                data.tabs.forEach(tab => {
-                    const tabItem = dockItem.tabItems.find(t => t.tab.id === tab.id);
-                    if (tabItem) {
-                        dockItem.dom.tabsList.appendChild(tabItem.dom.tabItem);
-                    }
-                });
-
-                this.dom.dropdownContainer.appendChild(dockItem.dom.dropdown);
-            }
-        });
-    }
-
-    #closeDock() {
-        this.destroy();
-    }
-
-    #adjustContainerWidth() {
-        if (this.dom.dockContainer) {
-            this.dom.dockContainer.style.maxWidth = `${window.innerWidth - 160}px`;
-        }
-    }
-
-    #addHorizontalScrolling() {
-        this.dom.dockItemContainer.addEventListener('wheel', this.boundHandlers.wheel);
     }
 
     #createDock() {
         this.dom.dock = document.createElement('div');
         this.dom.dock.id = 'dock';
+        this.dom.dock.classList.toggle('dock-top', this.state.position === 'top');
 
         const shadow = this.dom.dock.attachShadow({ mode: 'closed' });
 
-        fetch(this.browser.runtime.getURL('dock-styles.css'))
+        fetch(api.runtime.getURL('dock-styles.css'))
             .then(response => response.text())
             .then(cssText => {
+                // Create a style element
                 const styleElement = document.createElement('style');
                 styleElement.textContent = cssText;
-                shadow.appendChild(styleElement);                
+
+                shadow.appendChild(styleElement);
             });
 
         let template = document.createElement('template');
@@ -351,448 +72,402 @@ class Dock {
 
         const fragment = document.createDocumentFragment();
 
-        this.dom.dockBackground = document.createElement('div');
-        this.dom.dockBackground.className = 'dock-background';
+        const dockContainer = document.createElement('div');
+        dockContainer.className = 'dock-container';
 
-        this.dom.dockContainer = document.createElement('div');
-        this.dom.dockContainer.className = 'dock-container';
+        this.dom.grip = document.createElement('div');
+        this.dom.grip.className = 'dock-grip';
+        this.dom.grip.title = 'Drag to move the dock to the top or bottom of the window';
+        dockContainer.appendChild(this.dom.grip);
 
         this.dom.dockItemContainer = document.createElement('div');
         this.dom.dockItemContainer.id = 'tab-group-container';
         this.dom.dockItemContainer.className = 'tab-group-container';
+        dockContainer.appendChild(this.dom.dockItemContainer);
 
-        this.dom.dropdownContainer = document.createElement('div');
-        this.dom.dropdownContainer.className = 'dropdown-container';
-
-        this.#adjustContainerWidth();
-
-        this.dom.dockContainer.appendChild(this.dom.dockItemContainer);
-        fragment.appendChild(this.dom.dockBackground);
-        fragment.appendChild(this.dom.dockContainer);
-        fragment.appendChild(this.dom.dropdownContainer);
-
+        fragment.appendChild(dockContainer);
         template.appendChild(fragment);
+
         shadow.appendChild(template);
         document.body.appendChild(this.dom.dock);
 
         this.expandDock();
-
-        if (this.state.isLoading) {
-            this.dom.dock.style.opacity = '0';
-        }
-    }
-
-    setLoading(loading) {
-        this.state.isLoading = loading;
-        
-        if (this.dom.dock) {
-            if (loading) {
-                this.dom.dock.style.opacity = '0';
-                this.dom.dock.style.transform = 'translate(-50%, 20px)';
-                this.#collapseDock();
-            } else {
-                setTimeout(() => {
-                    this.dom.dock.style.opacity = '1';
-                    this.dom.dock.style.transform = 'translate(-50%, 0)';
-                    this.expandDock();
-                    
-                    // Trigger animation for dock items after dock appears
-                    setTimeout(() => {
-                        this.#animateDockItemsSequentially();
-                        // Update current website indicator after animation
-                        setTimeout(() => {
-                            this.#updateCurrentWebsiteIndicator();
-                        }, 100);
-                    }, 200);
-                }, 100);
-            }
-        }
-    }
-
-    isLoading() {
-        return this.state.isLoading;
     }
 
     #registerEvents() {
-        this.#registerPositionControlEvents();
-
-        this.eventHandlers.dockMouseover = e => {
+        this.dom.dock.addEventListener('mouseover', e => {
             this.state.isOver = true;
-            this.expandDock();
-        };
-        
-        this.eventHandlers.dockMouseleave = e => {
+            if (!this.state.isDraggingDock) {
+                this.expandDock();
+            }
+        });
+        this.dom.dock.addEventListener('mouseleave', e => {
             this.state.isOver = false;
-        };
-        
-        this.eventHandlers.dockItemClick = this.#handleDockItemEvents.bind(this);
-        this.eventHandlers.dockItemMousedown = this.#handleDockItemEvents.bind(this);
-        
-        this.eventHandlers.documentMousemove = (e) => {
-            if (this.state.isOpen && !this.state.isOver) {
-                if (this.state.position === 'bottom' && 
-                    e.clientY < (window.innerHeight - (window.innerHeight * 0.1))) {
-                    this.#collapseDock();
-                } else if (this.state.position === 'top' && 
-                         e.clientY > (window.innerHeight * 0.1)) {
-                    this.#collapseDock();
+            this.#resetMagnify();
+        });
+        this.dom.dock.addEventListener('mousemove', e => {
+            this.state.mouseX = e.clientX;
+            if (this.state.magnifyFrame === null) {
+                this.state.magnifyFrame = requestAnimationFrame(() => {
+                    this.state.magnifyFrame = null;
+                    this.#applyMagnify();
+                });
+            }
+        });
+
+        this.dom.dockItemContainer.addEventListener('click', this.#handleDockItemEvents.bind(this));
+        this.dom.dockItemContainer.addEventListener('mousedown', this.#handleDockItemEvents.bind(this));
+
+        document.addEventListener('mousemove', (e) => {
+            const nearEdge = this.state.position === 'top'
+                ? e.clientY < window.innerHeight * 0.1
+                : e.clientY > window.innerHeight * 0.9;
+            if (this.state.isOpen && !this.state.isOver && !this.state.isDraggingDock && !this.state.isReordering && !nearEdge) {
+                this.#collapseDock();
+            }
+        });
+
+        this.#registerGripDrag();
+
+        this.dragController = attachDragReorder(this.dom.dockItemContainer, {
+            itemSelector: '.tab-group',
+            // The dropdown is a DOM child of the icon: without this, pressing
+            // a tab row would also start an icon drag here.
+            ignoreSelector: '.dropdown-container',
+            axis: 'x',
+            reversed: false,
+            onDragStart: () => {
+                this.beginReorder();
+                this.dom.dockItemContainer.classList.add('reordering');
+                if (this.state.mountedDockItem) {
+                    this.state.mountedDockItem.unmountDropdown();
+                    this.state.mountedDockItem = null;
+                }
+                this.#resetMagnify();
+            },
+            onDragEnd: () => {
+                this.dom.dockItemContainer.classList.remove('reordering');
+                this.endReorder();
+            },
+            onCommit: (from, to, el) => {
+                const children = this.dom.dockItemContainer.children;
+                this.dom.dockItemContainer.insertBefore(el, to > from ? children[to].nextSibling : children[to]);
+                this.persistOrder();
+            }
+        });
+    }
+
+    beginReorder() {
+        this.state.isReordering = true;
+    }
+
+    // Replays the tabData that update() deferred during the drag; after a
+    // commit the persistOrder echo follows right behind and re-syncs order.
+    endReorder() {
+        this.state.isReordering = false;
+        if (this.state.pendingUpdate !== null) {
+            const pending = this.state.pendingUpdate;
+            this.state.pendingUpdate = null;
+            this.update(pending);
+        }
+    }
+
+    // Dragging the grip moves the whole dock; it snaps to the top or bottom
+    // edge on release, or is removed from the page when dropped on the trash
+    // zone. Raw mouse events, independent from the pointer-based reordering
+    // of dock items and tab rows (the grip is outside their containers).
+    #registerGripDrag() {
+        this.dom.grip.addEventListener('mousedown', (e) => {
+            if (e.button !== 0 || this.state.removed) return;
+            e.preventDefault();
+
+            this.state.isDraggingDock = true;
+            if (this.state.mountedDockItem) {
+                this.state.mountedDockItem.unmountDropdown();
+                this.state.mountedDockItem = null;
+            }
+            this.#resetMagnify();
+
+            // Freeze the dock exactly where it stands, then drag by cursor
+            // delta: no jump on grab, and the centering transform can be
+            // dropped for free 2D movement.
+            const rect = this.dom.dock.getBoundingClientRect();
+            const startX = e.clientX;
+            const startY = e.clientY;
+            this.dom.dock.classList.add('dock-dragging');
+            this.dom.dock.style.left = `${rect.x}px`;
+            this.dom.dock.style.top = `${rect.y}px`;
+            this.dom.dock.style.bottom = 'auto';
+            this.dom.dock.style.transform = 'none';
+
+            const trash = this.#ensureTrashZone();
+            // Force a layout so the .visible transition actually plays when
+            // the element was just inserted.
+            trash.getBoundingClientRect();
+            trash.classList.add('visible');
+
+            let lastY = startY;
+            let overTrash = false;
+
+            const onMove = (moveEvent) => {
+                lastY = moveEvent.clientY;
+                // No clamping: the dock tracks the cursor 1:1 even past the
+                // viewport edges, so the grip never slips out from under the
+                // mouse. Release always brings it back (snap or removal).
+                this.dom.dock.style.left = `${rect.x + moveEvent.clientX - startX}px`;
+                this.dom.dock.style.top = `${rect.y + moveEvent.clientY - startY}px`;
+
+                // Drop zone: the whole bottom-right third of the window
+                overTrash = moveEvent.clientX > window.innerWidth * 2 / 3
+                    && moveEvent.clientY > window.innerHeight * 2 / 3;
+                trash.classList.toggle('active', overTrash);
+            };
+
+            const onDrop = () => {
+                window.removeEventListener('mousemove', onMove, true);
+                window.removeEventListener('mouseup', onDrop, true);
+                window.removeEventListener('blur', onDrop, true);
+
+                this.state.isDraggingDock = false;
+                this.dom.dock.classList.remove('dock-dragging');
+                trash.classList.remove('visible', 'active');
+
+                if (overTrash) {
+                    this.#removeDockForPage();
+                    return;
+                }
+
+                // Restore horizontal centering, then snap to the nearest edge.
+                this.dom.dock.style.left = '';
+                this.dom.dock.style.transform = '';
+                const position = lastY < window.innerHeight / 2 ? 'top' : 'bottom';
+                this.setPosition(position, { persist: true });
+                // Always rewrite the anchored offset: it clears the inline
+                // top/bottom left by the drag even when the edge didn't change.
+                this.expandDock();
+            };
+
+            window.addEventListener('mousemove', onMove, true);
+            window.addEventListener('mouseup', onDrop, true);
+            window.addEventListener('blur', onDrop, true);
+        });
+    }
+
+    #ensureTrashZone() {
+        if (!this.dom.trash) {
+            this.dom.trash = document.createElement('div');
+            this.dom.trash.id = 'dock-trash';
+            this.dom.trash.innerHTML =
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+                + '<path d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-.9 12.1a2 2 0 0 1-2 1.9H8.9a2 2 0 0 1-2-1.9L6 9zm4 2.5v8h1.5v-8H10zm2.5 0v8H14v-8h-1.5z"/>'
+                + '</svg>';
+            document.body.appendChild(this.dom.trash);
+        }
+        return this.dom.trash;
+    }
+
+    // Dropping the dock on the trash zone hides it for this page only: no
+    // storage write, so the next reload brings it back.
+    #removeDockForPage() {
+        this.state.removed = true;
+        if (this.state.mountedDockItem) {
+            this.state.mountedDockItem.unmountDropdown();
+            this.state.mountedDockItem = null;
+        }
+        this.#resetMagnify();
+
+        // The independent opacity/scale properties don't fight the inline
+        // transform left by the drag.
+        this.dom.dock.style.transition = 'opacity 0.2s ease, scale 0.2s ease';
+        this.dom.dock.style.opacity = '0';
+        this.dom.dock.style.scale = '0.8';
+        setTimeout(() => {
+            this.dom.dock.remove();
+            if (this.dom.trash) {
+                this.dom.trash.remove();
+            }
+        }, 200);
+    }
+
+    #handleDockItemEvents(e) {
+        const target = e.target.closest('.tab-group');
+
+        if (target) {
+            const domain = target.dataset.domain;
+            const dockItem = this.dockItems.get(domain);
+
+            if (dockItem) {
+                switch (e.type) {
+                    case 'click':
+                        if (e.target.closest('.favicon')) {
+                            e.preventDefault();
+                            api.runtime.sendMessage({ action: 'openTab', tabUri: dockItem.getFirstTabUrl() });
+                        }
+                        break;
+                    case 'mousedown':
+                        if (e.target.closest('.favicon') && e.button === 1) {
+                            e.preventDefault();
+                            api.runtime.sendMessage({ action: 'openAndNavigateToTab', tabUri: dockItem.getFirstTabUrl() });
+                        }
+                        break;
                 }
             }
-        };
+        }
+    }
 
-        this.dom.dock.addEventListener('mouseover', this.eventHandlers.dockMouseover);
-        this.dom.dock.addEventListener('mouseleave', this.eventHandlers.dockMouseleave);
-        this.dom.dockItemContainer.addEventListener('click', this.eventHandlers.dockItemClick);
-        this.dom.dockItemContainer.addEventListener('mousedown', this.eventHandlers.dockItemMousedown);
-        document.addEventListener('mousemove', this.eventHandlers.documentMousemove);
+    // Continuous macOS-style magnification: each favicon's scale/lift is a
+    // linear falloff of the cursor's horizontal distance to its button center.
+    // Uses the independent scale/translate properties so the transform-based
+    // jump animation is never overridden.
+    #applyMagnify() {
+        if (this.state.isReordering || this.state.isDraggingDock) return;
+        for (const button of this.dom.dockItemContainer.children) {
+            const r = button.getBoundingClientRect();
+            const t = Math.max(0, 1 - Math.abs(this.state.mouseX - (r.left + r.width / 2)) / MAGNIFY_RADIUS);
+            const favicon = button.querySelector('.favicon');
+            favicon.style.scale = String(1 + t * MAGNIFY_MAX_BOOST);
+            // Icons grow toward the screen center: lift up at the bottom edge,
+            // push down at the top edge.
+            const lift = this.state.position === 'top' ? t : -t;
+            favicon.style.translate = `0 ${lift * MAGNIFY_MAX_LIFT}px`;
+        }
+    }
+
+    #resetMagnify() {
+        if (this.state.magnifyFrame !== null) {
+            cancelAnimationFrame(this.state.magnifyFrame);
+            this.state.magnifyFrame = null;
+        }
+        for (const button of this.dom.dockItemContainer.children) {
+            const favicon = button.querySelector('.favicon');
+            favicon.style.scale = '';
+            favicon.style.translate = '';
+        }
+    }
+
+    // Called by a DockItem on hover: only one dropdown keeps its rows mounted,
+    // so the page's DOM is bounded by the largest domain, not the total tab count.
+    onDropdownOpen(dockItem) {
+        if (this.state.mountedDockItem && this.state.mountedDockItem !== dockItem) {
+            this.state.mountedDockItem.unmountDropdown();
+        }
+        this.state.mountedDockItem = dockItem;
+        dockItem.mountDropdown();
+    }
+
+    // Writes the inline offset on the anchored edge and clears the other one:
+    // a leftover inline top/bottom from a grip drag would pin both edges.
+    #applyOffset(open) {
+        const offset = open ? '10px' : '-48px';
+        if (this.state.position === 'top') {
+            this.dom.dock.style.top = offset;
+            this.dom.dock.style.bottom = '';
+        } else {
+            this.dom.dock.style.bottom = offset;
+            this.dom.dock.style.top = '';
+        }
+    }
+
+    // Switches the anchored edge. The storage.onChanged echo re-enters here
+    // with the same value, so an early return keeps it idempotent.
+    setPosition(position, { persist = false } = {}) {
+        if (position !== 'top' && position !== 'bottom') return;
+
+        if (position !== this.state.position) {
+            this.state.position = position;
+            this.dom.dock.classList.toggle('dock-top', position === 'top');
+            if (this.state.mountedDockItem) {
+                this.state.mountedDockItem.unmountDropdown();
+                this.state.mountedDockItem = null;
+            }
+            this.#applyOffset(this.state.isOpen);
+        }
+
+        if (persist) {
+            api.storage.local.set({ dockPosition: position });
+        }
     }
 
     #collapseDock() {
-        if (this.dom.dock) {
-            if (this.state.position === 'bottom') {
-                this.dom.dock.style.bottom = '-54px';
-            } else {
-                this.dom.dock.style.top = '-54px';
-            }
+        if (this.dom.dock && !this.state.removed) {
+            this.#applyOffset(false);
             this.state.isOpen = false;
-            this.browser.runtime.sendMessage({ action: 'collapseDock' });
+            this.#resetMagnify();
+            if (this.state.mountedDockItem) {
+                this.state.mountedDockItem.unmountDropdown();
+                this.state.mountedDockItem = null;
+            }
         }
     }
 
     expandDock() {
-        if (this.dom.dock) {
-            if (this.state.position === 'bottom') {
-                this.dom.dock.style.bottom = '10px';
-            } else {
-                this.dom.dock.style.top = '10px';
-            }
+        if (this.dom.dock && !this.state.removed) {
+            this.#applyOffset(true);
             this.state.isOpen = true;
         }
     }
 
-    #addHoverBehavior() {
-        this.dom.dockItemContainer.addEventListener('mouseover', this.boundHandlers.mouseover);
-        this.dom.dockItemContainer.addEventListener('mouseout', this.boundHandlers.mouseout);
-        this.dom.dropdownContainer.addEventListener('mouseover', this.boundHandlers.dropdownMouseover);
-        this.dom.dropdownContainer.addEventListener('mouseout', this.boundHandlers.dropdownMouseout);
+    #createDockItem(domainData) {
+        return new DockItem(this, domainData);
     }
 
-    #showDropdown(domain) {
-        const dropdown = this.dom.dropdownContainer.querySelector(`.dropdown-content[data-domain="${domain}"]`);
-        const favicon = this.dom.dockItemContainer.querySelector(`.favicon[data-domain="${domain}"]`);
-        if (dropdown && favicon) {
-            dropdown.classList.add('active');
-            this.#positionDropdown(dropdown, favicon);
-        }
-    }
+    // The background is the only storage writer: it reorders its canonical tabData
+    // and saves once; the storage.onChanged echo makes update() a no-op here.
+    persistOrder() {
+        const newOrder = Array.from(this.dom.dockItemContainer.children)
+            .map(button => this.dockItems.get(button.dataset.domain))
+            .filter(Boolean)
+            .map(dockItem => ({ domain: dockItem.domain, tabIds: dockItem.getTabIds() }));
 
-    #hideDropdown(domain) {
-        const dropdown = this.dom.dropdownContainer.querySelector(`.dropdown-content[data-domain="${domain}"]`);
-        if (dropdown) {
-            setTimeout(() => {
-                if (!dropdown.matches(':hover')) {
-                    dropdown.classList.remove('active');
-                }
-            }, 100);
-        }
-    }
-
-    #positionDropdown(dropdown, favicon) {
-        const faviconRect = favicon.getBoundingClientRect();
-        const dockRect = this.dom.dock.getBoundingClientRect();
-        const dropdownRect = dropdown.getBoundingClientRect();
-        const marginSide = (window.innerWidth - dockRect.width);
-        const marginOneSide = marginSide / 2;
-        const dropDownRectHalfSized = (dropdownRect.width / 2);
-
-        let leftPosition = faviconRect.left - dockRect.left + faviconRect.width / 2;
-
-        if ((marginOneSide - dropDownRectHalfSized) + leftPosition < 0) {
-            leftPosition = 0 - (marginOneSide - dropDownRectHalfSized);
-        }
-        else if (marginOneSide + dockRect.width + (dropDownRectHalfSized - (dockRect.width - leftPosition)) > window.innerWidth) {
-            leftPosition = (window.innerWidth - (marginOneSide + dockRect.width + (dropDownRectHalfSized - (dockRect.width - leftPosition))) + leftPosition);
-        }
-
-        dropdown.style.left = `${leftPosition}px`;
-
-        const availableSpace = this.state.position === 'top' 
-            ? window.innerHeight - dockRect.bottom - 10
-            : dockRect.top - 10;
-
-        dropdown.querySelector('.tabs-list').style.maxHeight = `${availableSpace}px`;
-    }
-
-    #createTabGroup(domain, tabs) {
-        let dockItem = new DockItem(this, domain, tabs);
-
-        dockItem.onDragStart(() => {
-            this.state.draggedDockItem = dockItem;
-            setTimeout(() => {
-                dockItem.dom.button.classList.add('dragging');
-            }, 0);
-        });
-
-        dockItem.onDragEnd(() => {
-            setTimeout(() => {
-                this.state.draggedDockItem = null;
-                dockItem.dom.button.classList.remove('dragging');
-            }, 0);
-        });
-
-        dockItem.onMove((e) => {
-            e.preventDefault();
-            if (this.state.draggedDockItem != null && dockItem !== this.state.draggedDockItem) {
-                const draggedIndex = Object.values(this.dockItems).indexOf(this.state.draggedDockItem);
-                const targetIndex = Object.values(this.dockItems).indexOf(dockItem);
-
-                const dockItemArr = Object.values(this.dockItems);
-                this.#reorderArray(dockItemArr, draggedIndex, targetIndex);
-                this.reorderDom(dockItemArr);
-                this.#saveState(dockItemArr);
-            }
-        });
-
-        this.dockItems[dockItem.domain] = dockItem;
-        this.dom.dockItemContainer.appendChild(dockItem.dom.button);
-        this.dom.dropdownContainer.appendChild(dockItem.dom.dropdown);
-        return dockItem;
-    }
-
-    #insertNewDockItem(tabData, domain) {
-        const dockItem = this.#createTabGroup(domain, tabData.find(d => d.domain == domain).tabs);
-        this.dom.dockItemContainer.appendChild(dockItem.dom.button);
-        this.dockItems[domain].startFaviconAnimation();
-    }
-
-    #animateDockItemsSequentially() {
-        // Only animate once per dock initialization
-        if (this.state.hasAnimated) return;
-        this.state.hasAnimated = true;
-        
-        const dockItemElements = Array.from(this.dom.dockItemContainer.querySelectorAll('.tab-group'));
-        
-        // Set initial state for all items
-        dockItemElements.forEach(element => {
-            element.classList.add('dock-item-initial');
-        });
-
-        // Animate each item with a smooth delay
-        dockItemElements.forEach((element, index) => {
-            setTimeout(() => {
-                // Skip animation if item is being dragged
-                if (element.classList.contains('dragging')) {
-                    element.classList.remove('dock-item-initial');
-                    return;
-                }
-                
-                element.classList.remove('dock-item-initial');
-                element.classList.add('pop-in');
-                
-                // Remove animation class after animation completes
-                setTimeout(() => {
-                    element.classList.remove('pop-in');
-                }, 800);
-            }, index * 80); // 80ms delay between each item for smoother wave effect
-        });
-    }
-
-    removeDockItem(domain) {
-        if (this.dockItems[domain]) {
-            this.dockItems[domain].destroy();
-            delete this.dockItems[domain];
-        }
-    }
-
-    #reorderArray(arr, oldIndex, newIndex) {
-        arr.splice(newIndex, 0, arr.splice(oldIndex, 1)[0]);
-    }
-
-    #recreateDockItems(dockItemArr) {
-        let nDockItems = {};
-        for (let i = 0; i < dockItemArr.length; i++) {
-            nDockItems[dockItemArr[i].domain] = dockItemArr[i];
-        }
-        this.dockItems = nDockItems;
-    }
-
-    reorderDom(dockItemArr) {
-        let lastDomChild = null;
-        for (let i = dockItemArr.length - 1; i >= 0; i--) {
-            this.dom.dockItemContainer.insertBefore(dockItemArr[i].dom.button, lastDomChild);
-            lastDomChild = dockItemArr[i].dom.button;
-            dockItemArr[i].reorderDom();
-        }
+        api.runtime.sendMessage({ action: 'updateTabOrder', newOrder: newOrder });
     }
 
     update(tabData) {
-        let hasBeenModified = false;
+        if (!Array.isArray(tabData)) return;
 
-        // Remove items that are no longer present
-        for (const domain in this.dockItems) {
-            if (!tabData.find(d => d.domain == domain) || this.dockItems[domain] === undefined || this.dockItems[domain].length == 0) {
-                this.removeDockItem(domain);
-                hasBeenModified = true;
-            }
+        // Rebuilding the containers mid-drag would invalidate the drag's
+        // cached geometry; defer and let endReorder() replay the last one.
+        if (this.state.isReordering) {
+            this.state.pendingUpdate = tabData;
+            return;
         }
+        tabData = tabData.filter(d => d && Array.isArray(d.tabs) && d.tabs.length > 0);
 
-        // Insert new items
-        let hasNewItems = false;
-        for (const tabDataIndex in tabData) {
-            const domainData = tabData[tabDataIndex];
-            if (this.dockItems[domainData.domain] === undefined) {
-                this.#insertNewDockItem(tabData, domainData.domain);
-                hasBeenModified = true;
-                hasNewItems = true;
-            }
-        }
-
-        // Trigger animation for new items if this is the initial load
-        if (hasNewItems && Object.keys(this.dockItems).length === tabData.length) {
-            // Small delay to ensure DOM is updated
-            setTimeout(() => {
-                this.#animateDockItemsSequentially();
-            }, 50);
-        }
-
-        // Update and reorder
-        const dockItemArr = Object.values(this.dockItems);
-        for (const tabDataIndex in tabData) {
-            const domainData = tabData[tabDataIndex];
-            const oldIndex = dockItemArr.indexOf(dockItemArr.find(d => d.domain == domainData.domain));
-            if (tabDataIndex != oldIndex) {
-                this.#reorderArray(dockItemArr, tabDataIndex, oldIndex);
-                hasBeenModified = true;
-            }
-            this.dockItems[domainData.domain].update(domainData.tabs);
-            if (domainData.tabs.length > 0) {
-                if (this.dockItems[domainData.domain].dom.favicon.src != domainData.tabs[0].favicon) {
-                    this.dockItems[domainData.domain].setFaviconSrc(domainData.tabs[0].favicon);
+        // Remove domains that are gone
+        const domains = new Set(tabData.map(d => d.domain));
+        for (const [domain, dockItem] of this.dockItems) {
+            if (!domains.has(domain)) {
+                if (this.state.mountedDockItem === dockItem) {
+                    this.state.mountedDockItem = null;
                 }
-            }
-
-            for (const tabIndex in domainData.tabs) {
-                const currentTabItems = dockItemArr[tabDataIndex].tabItems.filter(t => t !== undefined);
-                const oldTabIndex = currentTabItems.indexOf(currentTabItems.find(t => t.tab.id == domainData.tabs[tabIndex].id));
-                if (tabIndex != oldTabIndex) {
-                    this.#reorderArray(currentTabItems, tabIndex, oldTabIndex);
-                    hasBeenModified = true;
-                }
-                dockItemArr[tabDataIndex].tabItems = currentTabItems;
+                dockItem.remove();
+                this.dockItems.delete(domain);
             }
         }
 
-        // Update current website indicator
-        this.#updateCurrentWebsiteIndicator();
-
-        if (hasBeenModified) {
-            this.#recreateDockItems(dockItemArr);
-            this.reorderDom(dockItemArr);
-        }
-    }
-
-    #updateCurrentWebsiteIndicator() {
-        // Request current tab info from background script
-        this.browser.runtime.sendMessage({ 
-            action: 'getCurrentTabInfo',
-            windowId: this.windowId 
-        }, (response) => {
-            if (response && response.url) {
-                const currentDomain = this.#extractDomain(response.url);
-                
-                // Update all dock items
-                Object.values(this.dockItems).forEach(dockItem => {
-                    const isCurrent = dockItem.domain === currentDomain;
-                    dockItem.setCurrentWebsite(isCurrent);
-                });
+        // Create missing domains, refresh existing ones
+        for (const domainData of tabData) {
+            let dockItem = this.dockItems.get(domainData.domain);
+            if (!dockItem) {
+                dockItem = this.#createDockItem(domainData);
+                this.dockItems.set(domainData.domain, dockItem);
+                this.dom.dockItemContainer.appendChild(dockItem.dom.button);
+                dockItem.startFaviconAnimation();
             } else {
-                console.warn('No response or URL from getCurrentTabInfo');
+                dockItem.update(domainData);
             }
-        });
+        }
+
+        this.#syncDomOrder(tabData);
     }
 
-    #extractDomain(url) {
-        try {
-            const urlObj = new URL(url);
-            return urlObj.hostname;
-        } catch (error) {
-            return null;
-        }
-    }
-
-    #registerTabChangeListener() {
-        // Listen for messages from background script about tab changes
-        this.browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            if (message.action === 'tabChanged' && message.windowId === this.windowId) {
-                this.#updateCurrentWebsiteIndicator();
-            }
-        });
-    }
-
-    destroy() {
-        // Remove all event listeners
-        if (this.boundHandlers) {
-            window.removeEventListener('resize', this.boundHandlers.resize);
-            
-            if (this.dom.dockItemContainer) {
-                this.dom.dockItemContainer.removeEventListener('wheel', this.boundHandlers.wheel);
-                this.dom.dockItemContainer.removeEventListener('mouseover', this.boundHandlers.mouseover);
-                this.dom.dockItemContainer.removeEventListener('mouseout', this.boundHandlers.mouseout);
-                this.dom.dockItemContainer.removeEventListener('click', this.eventHandlers.dockItemClick);
-                this.dom.dockItemContainer.removeEventListener('mousedown', this.eventHandlers.dockItemMousedown);
-            }
-            
-            if (this.dom.dropdownContainer) {
-                this.dom.dropdownContainer.removeEventListener('mouseover', this.boundHandlers.dropdownMouseover);
-                this.dom.dropdownContainer.removeEventListener('mouseout', this.boundHandlers.dropdownMouseout);
-            }
-        }
-        
-        if (this.eventHandlers) {
-            if (this.dom.dock) {
-                this.dom.dock.removeEventListener('mouseover', this.eventHandlers.dockMouseover);
-                this.dom.dock.removeEventListener('mouseleave', this.eventHandlers.dockMouseleave);
-            }
-            
-            if (this.dom.upButton) {
-                this.dom.upButton.removeEventListener('click', this.eventHandlers.upButton);
-            }
-            
-            if (this.dom.downButton) {
-                this.dom.downButton.removeEventListener('click', this.eventHandlers.downButton);
-            }
-            
-            if (this.dom.closeButton) {
-                this.dom.closeButton.removeEventListener('click', this.eventHandlers.closeButton);
-            }
-            
-            document.removeEventListener('mousemove', this.eventHandlers.documentMousemove);
-        }
-    
-        // Clear all items with proper cleanup
-        for (const domain in this.dockItems) {
-            if (this.dockItems[domain]) {
-                this.dockItems[domain].destroy();
-            }
-        }
-        
-        // Remove DOM elements
-        if (this.dom.dock) {
-            const shadow = this.dom.dock.shadowRoot;
-            if (shadow) {
-                shadow.innerHTML = '';
-            }
-            this.dom.dock.remove();
-        }
-    
-        // Clear all references for garbage collection
-        this.dockItems = null;
-        this.dom = null;
-        this.state = null;
-        this.browser = null;
-        this.windowId = null;
-        this.eventHandlers = null;
-        this.boundHandlers = null;
+    // DOM order = tabData array order. No-op when already in order, so the
+    // post-drag storage echo never disturbs hover state or CSS transitions.
+    #syncDomOrder(tabData) {
+        const desired = tabData.map(d => this.dockItems.get(d.domain).dom.button);
+        const current = Array.from(this.dom.dockItemContainer.children);
+        if (desired.length === current.length && desired.every((node, i) => node === current[i])) return;
+        desired.forEach(button => this.dom.dockItemContainer.appendChild(button));
     }
 }
 

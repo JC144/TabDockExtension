@@ -3,8 +3,7 @@
   max-width: calc(100% - 20px);
   border-radius: 10px;
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  justify-content: center;
   position: fixed;
   bottom: -60px;
   left: 50%;
@@ -12,132 +11,171 @@
   background-color: transparent;
   padding: 10px 0;
   margin: 0 10px 10px;
-  transition: bottom 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), 
-              top 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: top 0.3s ease, bottom 0.3s ease;
   z-index: 9999;
 }
 
-#dock.top {
-  bottom: auto;
+#dock.dock-top {
   top: -60px;
-  flex-direction: column-reverse;
+  bottom: auto;
+  margin: 10px 10px 0;
 }
 
-.dock-position-controls {
-  position: relative;
-  display: flex;
-  flex-direction: column;
+#dock.dock-dragging {
+  transition: none;
+  margin: 0;
 }
 
-.position-button {
-  opacity: 0;
-  margin: 6px 12px 0px 3px;
-}
-
-.position-button.visible {
-  opacity: 1;
-  pointer-events: auto;
-  display: flex;
-}
-
-.position-button svg {
-  width: 16px;
-  height: 16px;
-  fill: white;
-}
-
-.close-button {
-  position: absolute;
-  top: 28px;
-  right: 6px;  
-  display: flex;
-  
-  transition: background-color 0.2s ease;
-}
-
-.interaction-button:hover {
-  background-color: rgba(255, 255, 255, 0.5);
-}
-
-.interaction-button{
-  background-color: rgba(255, 255, 255, 0.3);
+/* Drop zone shown while the grip is being dragged; releasing the dock on it
+   removes the dock from this page until the next reload. Lives in the light
+   DOM (a transformed ancestor would break position: fixed inside the dock's
+   shadow root), so only the manifest-injected copy of this sheet styles it. */
+#dock-trash {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 96px;
+  height: 96px;
   border-radius: 50%;
-  width: 16px;
-  height: 16px;
-  justify-content: center;
+  display: flex;
   align-items: center;
-  cursor: pointer;
-  font-size: 10px;
-  color: black;
-  transition: background-color 0.2s ease;
-}
-
-.dock-container,
-.dock-background {
-  padding: 3px 24px 3px 3px;
-  width: auto;
-  height: 100%;
-  max-width: 100%;
-  border-radius: 16px;
-}
-
-.dock-background {
-  position: absolute;
-  top: 36px;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 48px;
+  justify-content: center;
   background: rgba(83, 83, 83, 0.25);
   backdrop-filter: blur(13px);
   -webkit-backdrop-filter: blur(13px);
   border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow: 0 0 0.5em 0.2em rgba(55, 21, 21, 0.35);
-  z-index: -1;
+  z-index: 10001;
+  opacity: 0;
+  visibility: hidden;
+  transform: scale(0.8);
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease, background-color 0.2s ease;
+}
+
+#dock-trash svg {
+  width: 36px;
+  height: 36px;
+  fill: rgba(255, 255, 255, 0.85);
+  transition: fill 0.2s ease;
+}
+
+#dock-trash.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: scale(1);
+}
+
+#dock-trash.active {
+  background-color: rgba(196, 43, 28, 0.55);
+  transform: scale(1.15);
+}
+
+#dock-trash.active svg {
+  fill: #fff;
 }
 
 .dock-container {
-  background: transparent;
-  position: relative;
-  z-index: 1;
+  padding: 3px;
+  width: auto;
+  height: 100%;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: rgba(83, 83, 83, 0.25);
+  backdrop-filter: blur(13px);
+  -webkit-backdrop-filter: blur(13px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0.5em 0.2em rgba(55, 21, 21, 0.35);
 }
 
-.tab-group-container::-webkit-scrollbar {
-  display: none;
+.dock-grip {
+  position: relative;
+  width: 12px;
+  align-self: stretch;
+  margin: 0 2px;
+  border-radius: 6px;
+  cursor: grab;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* Three embossed dots, vertically centered: each dot is a bright circle over
+   a light rim offset 1px down, which reads as engraved on the dark blur. */
+.dock-grip::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 5px;
+  height: 23px; /* 3 dots on an 8px rhythm, cropped right after the last dot */
+  background-image:
+    radial-gradient(circle at 2.5px 3.5px, rgba(255, 255, 255, 0.44) 1.6px, transparent 1.8px),
+    radial-gradient(circle at 2.5px 2.5px, rgba(255, 255, 255, 0.94) 1.5px, transparent 1.7px);
+  opacity: 0.8;
+  transition: opacity 0.15s ease;
+  background-size: 5px 8px;
+  background-repeat: repeat-y;
+}
+
+.dock-grip:hover::before {
+  opacity: 1;
+}
+
+.dock-grip:active {
+  cursor: grabbing;
 }
 
 .tab-group-container {
-  display: inline-flex;
-  max-width: 100%;
+  display: flex;
   align-items: flex-end;
-  height: 64px;
-  padding-bottom: 12px;
+  height: 38px;
   transition: all 0.2s ease;
-  white-space: nowrap;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  scroll-behavior: smooth;
+}
+
+:host(.dock-top) .tab-group-container {
+  align-items: flex-start;
 }
 
 .tab-group {
   position: relative;
+  /* transform also drives the neighbor slide during a reorder drag */
   transition: all 0.2s ease;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  will-change: transform, opacity;
-  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.tab-group:active {
-  cursor: grabbing;
-}
-
+/* Grabbed icon: tracks the pointer 1:1 via an inline transform, so no
+   transition may fight it; pointer capture keeps the events flowing while
+   pointer-events: none stops :hover from firing under the flying icon. */
 .tab-group.dragging {
-  opacity: 0.7;
-  transform: scale(1.1);
-  z-index: 1000;
+  transition: none;
+  z-index: 10001;
+  pointer-events: none;
   cursor: grabbing;
+}
+
+.tab-group.dragging .favicon {
+  scale: 1.15;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
+}
+
+/* Drop: the transform transition comes back on so the item glides into the gap */
+.tab-group.settling,
+.tab-item.settling {
+  transition: transform 0.2s ease;
+  z-index: 10001;
+}
+
+/* No dropdown may open under an icon being reordered */
+.tab-group-container.reordering .dropdown-container {
+  visibility: hidden !important;
+  opacity: 0 !important;
 }
 
 .favicon {
@@ -146,116 +184,81 @@
   padding: 0 8px;
   cursor: default;
   object-fit: cover;
-  transition: all 0.2s ease;
-}
-
-/* Current website indicator dot container */
-.current-website-indicator {
-  position: absolute;
-  bottom: -10px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 6px;
-  height: 6px;
-  background-color: #007AFF;
-  border-radius: 50%;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  box-shadow: 0 0 8px rgba(0, 122, 255, 0.6);
-  pointer-events: none;
-  z-index: 10;
-}
-
-/* Show indicator for current website */
-.current-website-indicator.active {
-  opacity: 1;
+  /* Short transition: smooths gaps between mousemove frames and animates
+     the return to rest, without lagging behind the cursor. */
+  transition: scale 0.12s ease-out, translate 0.12s ease-out;
 }
 
 .dropdown-container {
   position: absolute;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-}
-
-/* For bottom dock - dropdowns appear above */
-.dropdown-container:not(.top) {
-  top: auto;
-  bottom: 60%;
-}
-
-/* For top dock - dropdowns appear below */
-.dropdown-container.top {
-  bottom: auto;
-  top: 90%;
-}
-
-.dropdown-content {
-  position: absolute;
+  bottom: 150%;
+  /* Position it right above the favicon */
   left: 50%;
+  /* Center it horizontally */
   transform: translateX(-50%);
   visibility: hidden;
   opacity: 0;
+  z-index: 10000;
+  min-width: 400px;
   transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-  pointer-events: auto;
-  z-index: 10000; /* Ensure dropdowns appear above the dock */
 }
 
-/* For bottom dock - dropdowns slide up */
-.dropdown-container:not(.top) .dropdown-content {
-  bottom: 0;
-  top: auto;
-}
-
-.dropdown-container:not(.top) .dropdown-content.active {
+.tab-group:hover .dropdown-container,
+.dropdown-container:hover {
   visibility: visible;
   opacity: 1;
+  transform: translateX(-50%) translateY(-10px);
 }
 
-/* For top dock - dropdowns slide down */
-.dropdown-container.top .dropdown-content {
-  top: 0;
+/* Docked at the top edge: dropdowns open downward instead of upward. */
+:host(.dock-top) .dropdown-container {
   bottom: auto;
+  top: 150%;
 }
 
-.dropdown-container.top .dropdown-content.active {
+:host(.dock-top) .tab-group:hover .dropdown-container,
+:host(.dock-top) .dropdown-container:hover {
+  transform: translateX(-50%) translateY(10px);
+}
+
+/* Pointer capture during a row drag can drop the :hover chain; keep the
+   dropdown pinned open until the row settles. */
+.dropdown-container.row-reordering {
   visibility: visible;
   opacity: 1;
+  transform: translateX(-50%) translateY(-10px);
 }
 
-/* Tabs list positioning */
-.tabs-list {
+:host(.dock-top) .dropdown-container.row-reordering {
+  transform: translateX(-50%) translateY(10px);
+}
+
+:host(.dock-top) .dropdown-content {
+  flex-direction: column;
+}
+
+.dropdown-content {
+  position: relative;
   border-radius: 8px;
   padding: 8px 4px 8px 8px;
+  max-height: 300px;
   width: 400px;
   overflow-y: auto;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.5) transparent;
+  scrollbar-gutter: stable;
 }
 
-/* Specific ordering for bottom dock */
-#dock:not(.top) .dropdown-content {
-  transform: translateX(-50%) translateY(0);
-}
-
-#dock:not(.top) .dropdown-content.active {
-  transform: translateX(-50%) translateY(-100%);
-}
-
-/* Animation adjustments */
-#dock:not(.top) .dropdown-content {
-  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-}
-
-#dock.top .dropdown-content {
-  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-}
-
+/* Scrollbar hidden at rest, shown while the dropdown is hovered */
 .dropdown-content::-webkit-scrollbar {
+  display: none;
   width: 8px;
+}
+
+.dropdown-content:hover::-webkit-scrollbar {
+  display: block;
 }
 
 .dropdown-content::-webkit-scrollbar-track {
@@ -278,80 +281,21 @@
   width: 0px;
 }
 
-::-webkit-scrollbar-button {
-  height: 0;
-  width: 0
-}
-
-.dropdown-content::-webkit-scrollbar {
-  display: none;
-}
-
-.dropdown-content:hover::-webkit-scrollbar {
-  display: block;
-}
-
 .dropdown-content::-webkit-scrollbar-thumb:hover {
   background-color: rgba(255, 255, 255, 0.7);
 }
 
-.dropdown-content {
-  scrollbar-gutter: stable;
-}
-
 .tab-item {
-  background-color: rgba(83, 83, 83, 0.9);
+  background-color: rgba(83, 83, 83, 0.75);
   height: auto;
   padding: 8px;
   margin-top: 2px;
-  cursor: grab;
+  cursor: default;
   border-radius: 8px;
   display: flex;
   align-items: center;
-  transition: all 0.2s ease;
-}
-
-.tab-item:active {
-  cursor: grabbing;
-}
-
-.tab-item.dragging {
-  opacity: 0.7;
-  transform: scale(1.05);
-  z-index: 1000;
-  cursor: grabbing;
-  background-color: rgba(83, 83, 83, 0.95);
-}
-
-/* Drop zone feedback for tab items */
-.tab-item:not(.dragging):hover {
-  background-color: rgba(100, 100, 100, 0.9);
-  transform: translateY(-1px);
-}
-
-/* Hover effect for the active favicon */
-.tab-group:hover .favicon {
-  transform: scale(1.6) translateY(-6px);
-}
-
-/* Hover effect for the favicon immediately before the hovered one */
-.tab-group:hover+.tab-group .favicon {
-  transform: scale(1.2) translateY(-3px);
-}
-
-/* Hover effect for the favicon immediately after the hovered one */
-.tab-group:has(+ .tab-group:hover) .favicon {
-  transform: scale(1.2) translateY(-3px);
-}
-
-/* Hover effect for the favicon two before the hovered one */
-.tab-group:has(+ .tab-group + .tab-group:hover) .favicon {
-  transform: scale(1.1);
-}
-
-/* Hover effect for the favicon two after the hovered one */
-.tab-group:has(+ .tab-group:has(+ .tab-group:hover)) .favicon {
-  transform: scale(1.1);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .tab-item:last-child {
@@ -374,8 +318,18 @@
   vertical-align: middle;
 }
 
-/* This rule is now handled above with better styling */
+/* Grabbed row: opaque and lifted, following the pointer via inline transform */
+.tab-item.dragging {
+  transition: none;
+  position: relative;
+  z-index: 1;
+  background-color: rgba(83, 83, 83, 0.95);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  cursor: grabbing;
+  pointer-events: none;
+}
 
+/* Neighbor rows slide to open the gap */
 .tab-item:not(.dragging) {
   transition: transform 0.2s ease-in-out;
 }
@@ -423,10 +377,6 @@
   max-width: 65%;
 }
 
-.dragging {
-  cursor: default;
-}
-
 @keyframes jump {
   0% {
     transform: translateY(0);
@@ -441,59 +391,33 @@
   }
 }
 
+@keyframes jump-down {
+  0% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(10px);
+  }
+
+  100% {
+    transform: translateY(0);
+  }
+}
+
 .jump {
   animation: jump 0.5s;
 }
 
-@keyframes popIn {
-  0% {
-    transform: scale(0) translateY(40px);
-    opacity: 0;
-  }
-  15% {
-    transform: scale(0.3) translateY(25px);
-    opacity: 0.3;
-  }
-  35% {
-    transform: scale(1.2) translateY(-5px);
-    opacity: 0.8;
-  }
-  50% {
-    transform: scale(0.9) translateY(2px);
-    opacity: 0.95;
-  }
-  65% {
-    transform: scale(1.05) translateY(-1px);
-    opacity: 1;
-  }
-  80% {
-    transform: scale(0.98) translateY(0.5px);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1) translateY(0);
-    opacity: 1;
-  }
+:host(.dock-top) .jump {
+  animation-name: jump-down;
 }
 
-.pop-in {
-  animation: popIn 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  will-change: transform, opacity;
-  backface-visibility: hidden;
-  transform-style: preserve-3d;
-}
-
-/* Initial state for dock items before animation */
-.dock-item-initial {
-  transform: scale(0) translateY(40px);
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* Ensure dragging works even during animation */
-.dock-item-initial.dragging,
-.pop-in.dragging {
-  pointer-events: auto;
-  transform: scale(1) translateY(0) !important;
-  opacity: 1 !important;
+/* The dock must never show up on the printed page. !important beats the
+   inline top/bottom/opacity styles set by JS on the host element. */
+@media print {
+  #dock,
+  #dock-trash {
+    display: none !important;
+  }
 }

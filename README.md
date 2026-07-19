@@ -34,18 +34,30 @@ Yes of course, the best way is to go on the official page to get your store link
 
 If you want to use the source, rename manifest.YOURBROWSER.json into manifest.json and use the related procedure.
 
-## Can I contribute?
-Of course, as you can guess, I'm still a begineer in CSS.
+## It's amazing! How can I install it?
+Yes of course, the best way is to go on [the official page](https://jc.vasselon.com/TabDockWebsite/) to get your store link.
+
+If you want to use the source, build the extension for your browser (see below).
+
+## How can I build it?
+A PowerShell script does the packaging for you:
+
+```powershell
+.\build.ps1            # build both browsers
+.\build.ps1 chrome     # Chrome only
+.\build.ps1 firefox    # Firefox only
+```
+
+For each browser it creates `dist/<browser>/` with all the extension files and the right manifest (`manifest.chrome.json` is Manifest V3, `manifest.firefox.json` is Manifest V2), plus a store-ready archive `dist/tabdock-<browser>-<version>.zip` (Chrome Web Store / AMO).
+
+To test it locally:
+* **Chrome:** go to `chrome://extensions`, enable Developer mode and "Load unpacked" the `dist/chrome` folder.
+* **Firefox:** go to `about:debugging#/runtime/this-firefox` and "Load Temporary Add-on" with any file inside the `dist/firefox` folder.
 
 ## Can I fork it?
 As long as the project stays open-source, you do as you want!
 
-## What's coming?
-[ ] Firefox support... I hope, one day... Hey, it worked
-
-[ ] Animations improvements
-
 ## How can I support you?
-These crazy projects takes time.
+These crazy projects takes time and tokens.
 
 [A tip is always appreciated](https://www.paypal.com/donate/?hosted_button_id=XC7MKUJ7V94QY), it's the best recognition to see someone offering you a beer because you made a tool he use!

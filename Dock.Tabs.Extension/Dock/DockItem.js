@@ -1,110 +1,118 @@
 import TabItem from './TabItem.js';
+import { attachDragReorder } from './DragReorder.js';
+import { api, isMV3 } from '../browser-api.js';
+
+// Cached decode of the default icon, fetched once per page. Extension URLs are
+// exempt from the host page's CSP when fetched from the content script, unlike
+// <img> loads (cf. the CSS fetch in Dock.js).
+let defaultBitmapPromise = null;
+function getDefaultBitmap() {
+    if (!defaultBitmapPromise) {
+        defaultBitmapPromise = fetch(api.runtime.getURL('images/default_favicon.png'))
+            .then(response => response.blob())
+            .then(blob => createImageBitmap(blob));
+    }
+    return defaultBitmapPromise;
+}
 
 class DockItem {
-    constructor(parent, domain, tabs) {
-        this.#initialize(parent, domain, tabs);
+    // undefined (not null) so the first setFaviconSrc(null) still renders.
+    #renderedFavicon = undefined;
+    #renderToken = 0;
+
+    constructor(parent, domainData) {
+        this.#initialize(parent, domainData);
     }
 
-    #initialize(parent, domain, tabs) {
+    #initialize(parent, domainData) {
         this.dom = {
             button: null,
             favicon: null,
-            dropdown: null,
-            tabsList: null,
-            indicator: null
+            tabsListContainer: null,
+            tabsList: null
         };
 
-        this.state = {
-            draggedTabItem: null
-        }
-
-        this.tabItems = [];
-        this.domain = domain;
         this.parent = parent;
+        this.domain = domainData.domain;
+        this.tabs = domainData.tabs;
+        // Dropdown rows are mounted lazily on hover; null means unmounted.
+        this.tabItems = null;
 
-        if (typeof browser === "undefined") {
-            this.browser = chrome;
-        }
-        else {
-            this.browser = browser;
-        }
-
-        // Store event handlers for cleanup
-        this.eventHandlers = {
-            click: null,
-            mousedown: null,
-            dragover: null,
-            drop: null,
-            dragstart: null,
-            dragend: null
-        };
-
-        this.#createDockItem(tabs);
+        this.#createDockItem(domainData.favicon);
         this.#registerEvents();
     }
 
-    #createDockItem(tabs) {
+    #createDockItem(favicon) {
         this.dom.button = document.createElement('div');
-        this.dom.button.className = 'tab-group dock-item-initial';
+        this.dom.button.className = 'tab-group';
         this.dom.button.dataset.domain = this.domain;
-        this.dom.button.style.position = 'relative'; // Ensure positioning for indicator
 
-        this.dom.favicon = document.createElement('img');
+        const fragment = document.createDocumentFragment();
+
+        if (isMV3) {
+            this.dom.favicon = document.createElement('img');
+            this.dom.favicon.alt = this.domain;
+        } else {
+            // The host page's CSP applies to <img> loads injected by content
+            // scripts; drawing on a canvas is not a document load, so it can't
+            // be blocked. The pixels come as a data: PNG from the background.
+            this.dom.favicon = document.createElement('canvas');
+            this.dom.favicon.width = 32;
+            this.dom.favicon.height = 32;
+            this.dom.favicon.title = this.domain;
+        }
         this.dom.favicon.className = 'favicon';
-        this.dom.favicon.alt = this.domain;
         this.dom.favicon.dataset.domain = this.domain;
-        this.dom.favicon.loading = 'lazy'; // Add lazy loading
 
-        this.setFaviconSrc(tabs[0].favicon);
+        this.setFaviconSrc(favicon);
 
-        // Create current website indicator dot
-        this.dom.indicator = document.createElement('div');
-        this.dom.indicator.className = 'current-website-indicator';
+        fragment.appendChild(this.dom.favicon);
 
-        this.dom.button.setAttribute('draggable', true);
-        this.dom.button.appendChild(this.dom.favicon);
-        this.dom.button.appendChild(this.dom.indicator);
-
-        this.dom.dropdown = document.createElement('div');
-        this.dom.dropdown.className = 'dropdown-content';
-        this.dom.dropdown.dataset.domain = this.domain;
+        // The dropdown shell must exist eagerly (the CSS :hover rules target it),
+        // but its rows are only built by mountDropdown().
+        this.dom.tabsListContainer = document.createElement('div');
+        this.dom.tabsListContainer.className = 'dropdown-container';
 
         this.dom.tabsList = document.createElement('div');
-        this.dom.tabsList.className = 'tabs-list';
-        this.dom.dropdown.appendChild(this.dom.tabsList);
+        this.dom.tabsList.className = 'dropdown-content';
+        this.dom.tabsListContainer.appendChild(this.dom.tabsList);
+        fragment.appendChild(this.dom.tabsListContainer);
 
-        // Only create visible tabs initially
-        const maxInitialTabs = 10;
-        tabs.slice(0, maxInitialTabs).forEach((tab) => {
-            this.createTabItem(tab);
-        });
-
-        // Lazy load remaining tabs
-        if (tabs.length > maxInitialTabs) {
-            setTimeout(() => {
-                tabs.slice(maxInitialTabs).forEach((tab) => {
-                    this.createTabItem(tab);
-                });
-            }, 100);
-        }
+        this.dom.button.appendChild(fragment);
     }
 
     #registerEvents() {
-        // Store event handlers for cleanup
-        this.eventHandlers.click = this.#handleTabItemEvents.bind(this);
-        this.eventHandlers.mousedown = this.#handleTabItemEvents.bind(this);
-        this.eventHandlers.dragover = (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-        };
-        this.eventHandlers.dragenter = (e) => {
-            e.preventDefault();
-        };
+        this.dom.tabsListContainer.addEventListener('click', this.#handleTabItemEvents.bind(this));
+        this.dom.tabsListContainer.addEventListener('mousedown', this.#handleTabItemEvents.bind(this));
+        this.dom.button.addEventListener('mouseenter', () => {
+            if (!this.parent.state.isReordering) {
+                this.parent.onDropdownOpen(this);
+            }
+        });
 
-        this.dom.dropdown.addEventListener('click', this.eventHandlers.click);
-        this.dom.dropdown.addEventListener('mousedown', this.eventHandlers.mousedown);
-        this.dom.button.addEventListener('dragover', this.eventHandlers.dragover);
-        this.dom.button.addEventListener('dragenter', this.eventHandlers.dragenter);
+        this.dragController = attachDragReorder(this.dom.tabsList, {
+            itemSelector: '.tab-item',
+            ignoreSelector: '.close-button-container',
+            axis: 'y',
+            // column-reverse rendering: DOM-forward is visually upward
+            reversed: true,
+            onDragStart: () => {
+                this.parent.beginReorder();
+                // :hover can drop mid-drag (pointer capture); keep the
+                // dropdown pinned open until the row settles.
+                this.dom.tabsListContainer.classList.add('row-reordering');
+            },
+            onDragEnd: () => {
+                this.dom.tabsListContainer.classList.remove('row-reordering');
+                this.parent.endReorder();
+            },
+            onCommit: (from, to) => {
+                this.#reorderArray(this.tabItems, from, to);
+                this.#reorderArray(this.tabs, from, to);
+                this.#syncRowOrder();
+                this.parent.persistOrder();
+            }
+        });
     }
 
     #handleTabItemEvents(e) {
@@ -119,7 +127,7 @@ class DockItem {
                     e.stopPropagation();
                     this.#closeTab(tabId);
                 } else {
-                    this.browser.runtime.sendMessage({ action: 'focusTab', tabId: tabId });
+                    api.runtime.sendMessage({ action: 'focusTab', tabId: tabId });
                 }
                 break;
             case 'mousedown':
@@ -132,152 +140,78 @@ class DockItem {
     }
 
     #closeTab(tabId) {
-        this.browser.runtime.sendMessage({ action: 'closeTab', tabId: tabId });
-        this.removeTabItem(tabId);
-        if(this.tabItems.length == 0){
-            this.parent.removeDockItem(this.domain);
-        }
+        api.runtime.sendMessage({ action: 'closeTab', tabId: tabId });
     }
 
     #reorderArray(arr, oldIndex, newIndex) {
         arr.splice(newIndex, 0, arr.splice(oldIndex, 1)[0]);
     }
 
-    update(updatedTabs) {
-        // Filter out undefined values
-        this.tabItems = this.tabItems.filter(t => t !== undefined);
+    mountDropdown() {
+        if (this.tabItems !== null) return;
+        this.tabItems = [];
+        this.tabs.forEach((tab) => this.#createTabItem(tab));
+    }
 
-        // Compare if a tab is in dockObject.tabData but not in tabData
-        let removedTabItems = this.tabItems.filter(tabItem => !updatedTabs.map(t => t.id).includes(tabItem.tab.id));
-        if (removedTabItems.length > 0) {
-            removedTabItems.forEach(tabItem => {
-                this.removeTabItem(tabItem.tab.id);
-            });
+    unmountDropdown() {
+        if (this.tabItems === null) return;
+        this.dom.tabsList.replaceChildren();
+        this.tabItems = null;
+    }
+
+    update(domainData) {
+        this.tabs = domainData.tabs;
+        this.setFaviconSrc(domainData.favicon);
+
+        if (this.tabItems === null) return;
+
+        // The dropdown is mounted: diff its rows against the new tabs.
+        const liveIds = new Set(this.tabs.map(t => t.id));
+        for (const tabItem of this.tabItems.filter(t => !liveIds.has(t.tab.id))) {
+            this.tabItems.splice(this.tabItems.indexOf(tabItem), 1);
+            tabItem.remove();
         }
 
-        // Compare if a tab is in tabData but not in dockObject.tabData
-        let newTabs = updatedTabs.filter(tab => !this.tabItems.map(tabItem => tabItem.tab.id).includes(tab.id));
-        if (newTabs.length > 0) {
-            newTabs.forEach(tab => {
-                this.createTabItem(tab, updatedTabs);
-            });
+        for (const tab of this.tabs) {
+            const tabItem = this.tabItems.find(t => t.tab.id === tab.id);
+            if (tabItem) {
+                tabItem.update(tab);
+            } else {
+                this.#createTabItem(tab);
+            }
         }
+
+        const orderOf = (tabItem) => this.tabs.findIndex(t => t.id === tabItem.tab.id);
+        this.tabItems.sort((a, b) => orderOf(a) - orderOf(b));
+        this.#syncRowOrder();
     }
 
-    onMove(onButtonMoved) {
-        this.eventHandlers.drop = onButtonMoved;
-        this.dom.button.addEventListener('drop', this.eventHandlers.drop);
-    }
-
-    onDragStart(onDragStarted) {
-        this.eventHandlers.dragstart = onDragStarted;
-        this.dom.button.addEventListener('dragstart', this.eventHandlers.dragstart);
-    }
-
-    onDragEnd(onDragEnded) {
-        this.eventHandlers.dragend = onDragEnded;
-        this.dom.button.addEventListener('dragend', this.eventHandlers.dragend);
-    }
-
-    createTabItem(tab) {
+    #createTabItem(tab) {
         const tabItem = new TabItem(tab, this);
         this.dom.tabsList.appendChild(tabItem.dom.tabItem);
         this.tabItems.push(tabItem);
-
-        tabItem.onDragStart(() => {
-            this.state.draggedTabItem = tabItem;
-            setTimeout(() => {
-                tabItem.dom.tabItem.classList.add('dragging');
-            }, 0);
-        });
-
-        tabItem.onDragEnd(() => {
-            setTimeout(() => {
-                this.state.draggedTabItem = null;
-                tabItem.dom.tabItem.classList.remove('dragging');
-            }, 0);
-        });
-
-        tabItem.onMove((e) => {
-            e.preventDefault();
-            if (this.state.draggedTabItem != null && tabItem !== this.state.draggedTabItem) {
-
-                const draggedIndex = Object.values(this.tabItems).indexOf(this.state.draggedTabItem);
-                const targetIndex = Object.values(this.tabItems).indexOf(tabItem);
-
-                this.#reorderArray(this.tabItems, draggedIndex, targetIndex);
-                this.reorderDom();
-
-                this.parent.saveState();
-            }
-        });
-
-        tabItem.onDragOver((e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-        });
-
-        tabItem.onDragEnter((e) => {
-            e.preventDefault();
-        });
     }
 
-    reorderDom() {
-        let lastDomChild = null;
-        for (let i = this.tabItems.length - 1; i >= 0; i--) {
-            this.dom.tabsList.insertBefore(this.tabItems[i].dom.tabItem, lastDomChild);
-            lastDomChild = this.tabItems[i].dom.tabItem;
-        }
+    // DOM order = tabs array order; the visual (bottom-up) direction comes from
+    // the CSS column-reverse on .dropdown-content, never from insertion order.
+    #syncRowOrder() {
+        const desired = this.tabItems.map(t => t.dom.tabItem);
+        const current = Array.from(this.dom.tabsList.children);
+        if (desired.length === current.length && desired.every((node, i) => node === current[i])) return;
+        desired.forEach(node => this.dom.tabsList.appendChild(node));
     }
 
-    removeTabItem(tabId) {
-        let tabItem = this.tabItems.find(t => t.tab.id == tabId);
-        if (tabItem) {
-            this.tabItems.splice(this.tabItems.indexOf(tabItem), 1);
-            tabItem.destroy();
-        }
+    getTabIds() {
+        return this.tabs.map(t => t.id);
+    }
+
+    getFirstTabUrl() {
+        return this.tabs[0]?.url;
     }
 
     remove() {
-        // Clean up event listeners
-        if (this.dom.dropdown) {
-            this.dom.dropdown.removeEventListener('click', this.eventHandlers.click);
-            this.dom.dropdown.removeEventListener('mousedown', this.eventHandlers.mousedown);
-        }
-        
-        if (this.dom.button) {
-            this.dom.button.removeEventListener('dragover', this.eventHandlers.dragover);
-            this.dom.button.removeEventListener('dragenter', this.eventHandlers.dragenter);
-            if (this.eventHandlers.drop) {
-                this.dom.button.removeEventListener('drop', this.eventHandlers.drop);
-            }
-            if (this.eventHandlers.dragstart) {
-                this.dom.button.removeEventListener('dragstart', this.eventHandlers.dragstart);
-            }
-            if (this.eventHandlers.dragend) {
-                this.dom.button.removeEventListener('dragend', this.eventHandlers.dragend);
-            }
-            this.dom.button.remove();
-        }
-        
-        if (this.dom.dropdown) {
-            this.dom.dropdown.remove();
-        }
-        
-        // Clean up tab items
-        this.tabItems.forEach(tabItem => {
-            if (tabItem && tabItem.destroy) {
-                tabItem.destroy();
-            }
-        });
-        
-        this.tabItems = [];
-        this.eventHandlers = null;
-    }
-
-    // Alias for compatibility
-    destroy() {
-        this.remove();
+        this.dom.button.remove();
+        this.tabItems = null;
     }
 
     startFaviconAnimation() {
@@ -286,21 +220,48 @@ class DockItem {
     }
 
     setFaviconSrc(src) {
-        let faviconSrc = src;
-        if (faviconSrc === undefined || faviconSrc == "default_favicon.png") {
-            faviconSrc = this.browser.runtime.getURL("images/default_favicon.png");
+        if (this.#renderedFavicon === src) return;
+        this.#renderedFavicon = src;
+
+        if (isMV3) {
+            let faviconSrc = src;
+            if (!faviconSrc || faviconSrc == "default_favicon.png") {
+                faviconSrc = api.runtime.getURL("images/default_favicon.png");
+            }
+            // One-shot: detached before the swap so a broken default can't loop.
+            this.dom.favicon.onerror = () => {
+                this.dom.favicon.onerror = null;
+                this.dom.favicon.src = api.runtime.getURL("images/default_favicon.png");
+            };
+            if (this.dom.favicon.src !== faviconSrc) {
+                this.dom.favicon.src = faviconSrc;
+            }
+            return;
         }
-        this.dom.favicon.src = faviconSrc;
+
+        this.#drawFavicon(src);
     }
 
-    setCurrentWebsite(isCurrent) {
-        if (this.dom.indicator) {
-            if (isCurrent) {
-                this.dom.indicator.classList.add('active');
-            } else {
-                this.dom.indicator.classList.remove('active');
+    async #drawFavicon(src) {
+        const token = ++this.#renderToken;
+        let bitmap = null;
+        if (src && src.startsWith('data:')) {
+            try {
+                const bytes = Uint8Array.from(atob(src.split(',')[1]), c => c.charCodeAt(0));
+                bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+            } catch (e) {
+                bitmap = null;
             }
         }
+        if (!bitmap) {
+            // null, "default_favicon.png", a stale raw URL from the old storage
+            // schema, or an undecodable payload: show the default icon.
+            bitmap = await getDefaultBitmap();
+        }
+        if (token !== this.#renderToken) return;
+        const ctx = this.dom.favicon.getContext('2d');
+        ctx.clearRect(0, 0, 32, 32);
+        ctx.drawImage(bitmap, 0, 0, 32, 32);
     }
 }
 

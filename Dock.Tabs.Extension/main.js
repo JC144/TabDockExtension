@@ -1,219 +1,88 @@
 import Dock from './Dock/Dock.js';
+import { api } from './browser-api.js';
 
 class Main {
     constructor() {
-        this.browser = typeof browser === "undefined" ? chrome : browser;
-        this.initialized = false;
-        this.storageListener = null;
-        this.messageListener = null;
-        this.visibilityListener = null;
-        this.dock = null;
-        this.currentWindowId = null;
-        this.tabDataCache = null;
-        this.lastUpdateTime = 0;
-        this.updateThrottle = 500; // Throttle updates to 500ms
-
-        let checkDocumentState = setInterval(() => {
-            if (document.readyState === "complete" || document.readyState === "loaded") {
-                this.#initialize();
-                clearInterval(checkDocumentState);
-            }
-        }, 10);
-    }
-
-    async #initialize() {     
-        // Request window ID from background script
-        await this.#getWindowId();
-
-        // Register visibility change event
-        this.visibilityListener = this.#handleVisibilityChange.bind(this);
-        document.addEventListener('visibilitychange', this.visibilityListener);
-        
-        // Only initialize if the document is visible
-        if (document.visibilityState === 'visible') {
-            this.#initializeDock();
-        }
-    }
-
-    async #getWindowId() {
-        return new Promise((resolve) => {
-            // First try getting window ID from background script
-            this.browser.runtime.sendMessage({ action: 'getWindowId' }, (response) => {
-                if (response && response.windowId) {
-                    this.currentWindowId = response.windowId;
-                    resolve(response.windowId);
-                }
-            });
-
-            // Also listen for setWindowId message in case it comes later
-            const messageListener = (message) => {
-                if (message.action === 'setWindowId') {
-                    this.currentWindowId = message.windowId;
-                    this.browser.runtime.onMessage.removeListener(messageListener);
-                    resolve(message.windowId);
-                }
-            };
-            this.browser.runtime.onMessage.addListener(messageListener);
-        });
-    }
-
-    async #initializeDock() {
-        if (!this.initialized && this.currentWindowId) {
-            this.dock = new Dock();
-            this.dock.setLoading(true);
-            this.dock.setWindowId(this.currentWindowId);
-            this.#registerEvents();
-
-            try {
-                this.initialized = true;
-                await this.#loadTabs();
-                this.dock.setLoading(false);
-            } catch (error) {
-                console.error('Failed to initialize dock:', error);
-                this.#cleanupDock();
-            }
-        }
-    }
-
-    #cleanupDock() {
-        if (this.initialized) {
-            this.#unregisterEvents();
-            if (this.dock) {
-                this.dock.destroy();
-                this.dock = null;
-            }
-            this.initialized = false;
-            this.tabDataCache = null;
-            this.lastUpdateTime = 0;
-        }
-    }
-
-    #handleVisibilityChange() {
-        if (document.visibilityState === 'visible') {
-            if (!this.initialized) {
-                this.#initializeDock();
-            }
+        if (document.readyState === 'complete') {
+            this.#initialize();
         } else {
-            // Don't cleanup immediately - dock might still be in use
-            setTimeout(() => {
-                if (document.visibilityState !== 'visible' && this.dock && !this.dock.state.isOver) {
-                    this.#cleanupDock();
-                }
-            }, 1000);
+            window.addEventListener('load', () => this.#initialize(), { once: true });
         }
+    }
+
+    async #initialize() {
+        // Read the persisted dock edge before building the dock, so the first
+        // paint is already on the right edge (no bottom-to-top jump).
+        let dockPosition = 'bottom';
+        try {
+            const data = await api.storage.local.get('dockPosition');
+            if (data.dockPosition === 'top') {
+                dockPosition = 'top';
+            }
+        } catch (e) { }
+
+        this.dock = new Dock(dockPosition);
+
+        // Content scripts cannot read their own windowId; the background reads
+        // it from sender.tab. Must be known before the first render.
+        try {
+            const response = await api.runtime.sendMessage({ action: 'getWindowId' });
+            this.windowId = response ? response.windowId : undefined;
+        } catch (e) {
+            this.windowId = undefined;
+        }
+
+        this.#registerEvents();
+        this.#loadTabs();
+    }
+
+    // The dock only shows this window's tabs. If the windowId is unknown
+    // (no response from the background), fall back to showing everything.
+    #filterForWindow(tabData) {
+        if (this.windowId === undefined || !Array.isArray(tabData)) return tabData;
+        return tabData
+            .map(d => ({ ...d, tabs: d.tabs.filter(t => t.windowId === this.windowId) }))
+            .filter(d => d.tabs.length > 0);
     }
 
     #registerEvents() {
-        this.storageListener = this.#handleStorageChange.bind(this);
-        this.messageListener = this.#handleMessage.bind(this);
-
-        this.browser.storage.onChanged.addListener(this.storageListener);
-        this.browser.runtime.onMessage.addListener((message, sender) => {
-            // Handle window change messages
-            if (message.action === 'windowChanged') {
-                this.#handleWindowChange(message.windowId);
+        api.storage.onChanged.addListener((changes, area) => {
+            if (area === 'local' && changes.tabData) {
+                this.tabData = changes.tabData.newValue;
+                this.dock.update(this.#filterForWindow(this.tabData));
             }
-            return this.messageListener(message, sender);
+            // No persist: this is the echo of another tab's write (or our own,
+            // where setPosition's same-value early return makes it a no-op).
+            if (area === 'local' && changes.dockPosition) {
+                this.dock.setPosition(changes.dockPosition.newValue);
+            }
         });
-    }
 
-    async #handleWindowChange(newWindowId) {
-        if (this.currentWindowId !== newWindowId) {
-            this.currentWindowId = newWindowId;
-            
-            // Update dock's window ID
-            if (this.dock) {
-                this.dock.setWindowId(newWindowId);
-                
-                // Clear cache to force reload
-                this.tabDataCache = null;
-                await this.#loadTabs();
+        api.runtime.onMessage.addListener((message) => {
+            switch (message.action) {
+                case 'expandDock':
+                    this.dock.expandDock();
+                    break;
+                // This tab was dragged to another window: the windowId cached
+                // at load is stale, so re-filter the last known tabData for
+                // the new window.
+                case 'windowChanged':
+                    this.windowId = message.windowId;
+                    if (this.tabData) {
+                        this.dock.update(this.#filterForWindow(this.tabData));
+                    }
+                    break;
             }
-        }
-    }
-
-    #unregisterEvents() {
-        if (this.storageListener) {
-            this.browser.storage.onChanged.removeListener(this.storageListener);
-            this.storageListener = null;
-        }
-
-        if (this.messageListener) {
-            this.browser.runtime.onMessage.removeListener(this.messageListener);
-            this.messageListener = null;
-        }
-
-        if (this.visibilityListener) {
-            document.removeEventListener('visibilitychange', this.visibilityListener);
-            this.visibilityListener = null;
-        }
-    }
-
-    #handleStorageChange(changes, area) {
-        // Throttle updates
-        const now = Date.now();
-        if (now - this.lastUpdateTime < this.updateThrottle) {
-            return;
-        }
-        this.lastUpdateTime = now;
-
-        if (area === 'local' && changes.tabData && this.dock) {
-            // Get only the current window's tab data
-            const windowTabData = changes.tabData.newValue[this.currentWindowId] || [];
-            
-            // Only update if data actually changed
-            if (this.#hasDataChanged(windowTabData)) {
-                this.tabDataCache = windowTabData;
-                this.dock.update(windowTabData);
-            }
-        }
-    }
-
-    #hasDataChanged(newData) {
-        if (!this.tabDataCache) return true;
-        if (this.tabDataCache.length !== newData.length) return true;
-        
-        // Simple comparison - could be optimized further
-        return JSON.stringify(this.tabDataCache) !== JSON.stringify(newData);
-    }
-
-    #handleMessage(message) {
-        if (!this.dock) return;
-
-        switch (message.action) {
-            case 'expandDock':
-                this.dock.expandDock();
-                break;
-        }
+        });
     }
 
     #loadTabs() {
-        if (!this.dock) {
-            this.#initializeDock();
-            return;
-        }
-
-        return new Promise((resolve, reject) => {
-            this.browser.storage.local.get('tabData', (data) => {
-                if (chrome.runtime.lastError) {
-                    reject(chrome.runtime.lastError);
-                    return;
-                }
-                
-                if (data.tabData && this.currentWindowId) {
-                    // Get only the current window's tab data
-                    const windowTabData = data.tabData[this.currentWindowId] || [];
-                    this.tabDataCache = windowTabData;
-                    this.dock.update(windowTabData);
-                }
-                resolve(data.tabData || {});
-            });
+        api.storage.local.get('tabData').then((data) => {
+            if (data.tabData) {
+                this.tabData = data.tabData;
+                this.dock.update(this.#filterForWindow(this.tabData));
+            }
         });
-    }
-
-    // Public cleanup method for content script to call
-    cleanup() {
-        this.#cleanupDock();
     }
 }
 

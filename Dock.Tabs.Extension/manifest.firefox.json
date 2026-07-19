@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Tab Dock",
-  "version": "1.5",
+  "version": "2.1",
   "description": "Display a dock with all tabs grouped by domain.",
   "permissions": [
     "tabs",
@@ -33,13 +33,14 @@
     }
   ],
   "web_accessible_resources": [
-    "_favicon/*",
     "dock-styles.css",
     "images/default_favicon.png",
     "images/icons8-close.svg",
     "main.js",
+    "browser-api.js",
     "Dock/Dock.js",
     "Dock/DockItem.js",
-    "Dock/TabItem.js"
+    "Dock/TabItem.js",
+    "Dock/DragReorder.js"
   ]
 }
