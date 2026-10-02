@@ -1,5 +1,5 @@
 # Tab Dock Extension
-[Official website](http://jc.vasselon.com/TabDockWebsite/)
+[Official website](https://tabdock.org/)
 
 ![Presentation of Tab Dock](http://jc.vasselon.com/TabDockWebsite/Webdock3.gif)
 
@@ -35,7 +35,7 @@ Yes of course, the best way is to go on the official page to get your store link
 If you want to use the source, rename manifest.YOURBROWSER.json into manifest.json and use the related procedure.
 
 ## It's amazing! How can I install it?
-Yes of course, the best way is to go on [the official page](https://jc.vasselon.com/TabDockWebsite/) to get your store link.
+Yes of course, the best way is to go on [the official page](https://tabdock.org/) to get your store link.
 
 If you want to use the source, build the extension for your browser (see below).
 
