@@ -1,4 +1,14 @@
-#dock {
+/* This sheet is only ever loaded inside the dock's closed shadow root, never
+   injected into the page. The host (a plain <div>) is reset and turned into
+   a box-less wrapper: in the shadow context, !important beats every page rule
+   and even the host's inline style, so the page can neither restyle nor
+   offset it, nor leak inherited fonts/colors into the dock. */
+:host {
+  all: initial !important;
+  display: contents !important;
+}
+
+.dock {
   width: auto;
   max-width: calc(100% - 20px);
   border-radius: 10px;
@@ -13,27 +23,49 @@
   margin: 0 10px 10px;
   transition: top 0.3s ease, bottom 0.3s ease;
   z-index: 9999;
+  /* The dock is a popover (cf. Dock.js): undo the browser's popover defaults
+     that the declarations above don't already replace, or it would be pinned
+     to the top-left corner, framed and clipped. */
+  top: auto;
+  right: auto;
+  height: auto;
+  border: 0;
+  overflow: visible;
 }
 
-#dock.dock-top {
+/* A closed popover must stay hidden: the display values of .dock and
+   .dock-trash would otherwise put it back in the page's flow, where the
+   host's ancestors can hide or move it again. */
+.dock[popover]:not(:popover-open),
+.dock-trash[popover]:not(:popover-open) {
+  display: none;
+}
+
+.dock.dock-top {
   top: -60px;
   bottom: auto;
   margin: 10px 10px 0;
 }
 
-#dock.dock-dragging {
+.dock.dock-dragging {
   transition: none;
   margin: 0;
 }
 
 /* Drop zone shown while the grip is being dragged; releasing the dock on it
-   removes the dock from this page until the next reload. Lives in the light
-   DOM (a transformed ancestor would break position: fixed inside the dock's
-   shadow root), so only the manifest-injected copy of this sheet styles it. */
-#dock-trash {
+   removes the dock from this page until the next reload. A sibling of .dock in
+   the shadow root, not a child: .dock's transform would become the containing
+   block of its position: fixed. */
+.dock-trash {
   position: fixed;
   right: 24px;
   bottom: 24px;
+  /* Popover defaults to undo, as for .dock */
+  top: auto;
+  left: auto;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
   width: 96px;
   height: 96px;
   border-radius: 50%;
@@ -52,29 +84,30 @@
   transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease, background-color 0.2s ease;
 }
 
-#dock-trash svg {
+.dock-trash svg {
   width: 36px;
   height: 36px;
   fill: rgba(255, 255, 255, 0.85);
   transition: fill 0.2s ease;
 }
 
-#dock-trash.visible {
+.dock-trash.visible {
   opacity: 1;
   visibility: visible;
   transform: scale(1);
 }
 
-#dock-trash.active {
+.dock-trash.active {
   background-color: rgba(196, 43, 28, 0.55);
   transform: scale(1.15);
 }
 
-#dock-trash.active svg {
+.dock-trash.active svg {
   fill: #fff;
 }
 
 .dock-container {
+  position: relative;
   padding: 3px;
   width: auto;
   height: 100%;
@@ -84,10 +117,23 @@
   justify-content: center;
   border-radius: 16px;
   background: rgba(83, 83, 83, 0.25);
-  backdrop-filter: blur(13px);
-  -webkit-backdrop-filter: blur(13px);
   border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow: 0 0 0.5em 0.2em rgba(55, 21, 21, 0.35);
+}
+
+/* The blur sits on a layer behind the container instead of on the container
+   itself: a filter on an ancestor of the dropdowns would make the browser
+   report them as never reliably visible (cf. .dropdown-shield). -1px covers
+   the border too, as backdrop-filter on the container did. */
+.dock-container::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  backdrop-filter: blur(13px);
+  -webkit-backdrop-filter: blur(13px);
+  pointer-events: none;
 }
 
 .dock-grip {
@@ -135,7 +181,7 @@
   transition: all 0.2s ease;
 }
 
-:host(.dock-top) .tab-group-container {
+.dock-top .tab-group-container {
   align-items: flex-start;
 }
 
@@ -175,6 +221,9 @@
 /* No dropdown may open under an icon being reordered */
 .tab-group-container.reordering .dropdown-container {
   visibility: hidden !important;
+}
+
+.tab-group-container.reordering .dropdown-content {
   opacity: 0 !important;
 }
 
@@ -197,27 +246,44 @@
   /* Center it horizontally */
   transform: translateX(-50%);
   visibility: hidden;
-  opacity: 0;
   z-index: 10000;
   min-width: 400px;
-  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
+  transition: transform 0.2s ease, visibility 0.2s ease;
 }
 
 .tab-group:hover .dropdown-container,
 .dropdown-container:hover {
   visibility: visible;
-  opacity: 1;
   transform: translateX(-50%) translateY(-10px);
 }
 
+/* The fade is carried by the content, not the container, so the shield (a
+   child of the container) is never under a partial opacity. */
+.tab-group:hover .dropdown-content,
+.dropdown-container:hover .dropdown-content,
+.dropdown-container.row-reordering .dropdown-content {
+  opacity: 1;
+}
+
+/* Transparent, click-through sheet laid over the whole dropdown, watched by
+   an IntersectionObserver (cf. Dock.js): the browser reports it visible only
+   while nothing from the page is painted above it. Above every row, the
+   settling one included. */
+.dropdown-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 10002;
+  pointer-events: none;
+}
+
 /* Docked at the top edge: dropdowns open downward instead of upward. */
-:host(.dock-top) .dropdown-container {
+.dock-top .dropdown-container {
   bottom: auto;
   top: 150%;
 }
 
-:host(.dock-top) .tab-group:hover .dropdown-container,
-:host(.dock-top) .dropdown-container:hover {
+.dock-top .tab-group:hover .dropdown-container,
+.dock-top .dropdown-container:hover {
   transform: translateX(-50%) translateY(10px);
 }
 
@@ -225,15 +291,14 @@
    dropdown pinned open until the row settles. */
 .dropdown-container.row-reordering {
   visibility: visible;
-  opacity: 1;
   transform: translateX(-50%) translateY(-10px);
 }
 
-:host(.dock-top) .dropdown-container.row-reordering {
+.dock-top .dropdown-container.row-reordering {
   transform: translateX(-50%) translateY(10px);
 }
 
-:host(.dock-top) .dropdown-content {
+.dock-top .dropdown-content {
   flex-direction: column;
 }
 
@@ -246,6 +311,8 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column-reverse;
+  opacity: 0;
+  transition: opacity 0.2s ease;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.5) transparent;
   scrollbar-gutter: stable;
@@ -316,6 +383,13 @@
   white-space: nowrap;
   text-align: left;
   vertical-align: middle;
+}
+
+/* The title is painted from an attribute, not a text node: generated content
+   is out of reach of window.find(), which would otherwise let the host page
+   read it through the closed shadow root (cf. TabItem.js). */
+.tab-item-text::before {
+  content: attr(data-title);
 }
 
 /* Grabbed row: opaque and lifted, following the pointer via inline transform */
@@ -409,15 +483,13 @@
   animation: jump 0.5s;
 }
 
-:host(.dock-top) .jump {
+.dock-top .jump {
   animation-name: jump-down;
 }
 
-/* The dock must never show up on the printed page. !important beats the
-   inline top/bottom/opacity styles set by JS on the host element. */
+/* The dock must never show up on the printed page. */
 @media print {
-  #dock,
-  #dock-trash {
+  :host {
     display: none !important;
   }
 }

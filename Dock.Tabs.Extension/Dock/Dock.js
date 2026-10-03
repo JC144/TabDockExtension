@@ -1,7 +1,3 @@
-import DockItem from './DockItem.js';
-import { attachDragReorder } from './DragReorder.js';
-import { api } from '../browser-api.js';
-
 // Proximity magnification: how far (px) the effect reaches from the cursor,
 // peak scale boost (1 + MAX_BOOST) and peak upward lift (px).
 const MAGNIFY_RADIUS = 120;
@@ -9,6 +5,12 @@ const MAGNIFY_MAX_BOOST = 0.4;
 const MAGNIFY_MAX_LIFT = 6;
 
 class Dock {
+    // Chromium only (IntersectionObserver v2): tells whether an element is
+    // really displayed, i.e. not covered by, nor faded or distorted through,
+    // anything else. null where the browser can't tell.
+    #visibilityObserver = null;
+    #visibleElements = new WeakSet();
+
     constructor(initialPosition = 'bottom') {
         this.#initialize(initialPosition);
     }
@@ -20,6 +22,9 @@ class Dock {
             // 'bottom' or 'top': which window edge the dock is anchored to
             position: initialPosition === 'top' ? 'top' : 'bottom',
             isDraggingDock: false,
+            // True when the dock is displayed in the browser's top layer
+            // (Popover API available), see #createDock
+            topLayer: false,
             // Set when the dock was dropped on the trash zone: gone from this
             // page until the next reload
             removed: false,
@@ -35,6 +40,10 @@ class Dock {
         };
 
         this.dom = {
+            // The host <div>, the only node in the page's DOM
+            host: null,
+            shadow: null,
+            // .dock, the positioned element inside the shadow root
             dock: null,
             grip: null,
             trash: null,
@@ -45,32 +54,63 @@ class Dock {
         // on update(), and from the DOM when persisting a drag.
         this.dockItems = new Map();
 
+        if (typeof IntersectionObserverEntry !== 'undefined' && 'isVisible' in IntersectionObserverEntry.prototype) {
+            this.#visibilityObserver = new IntersectionObserver(entries => {
+                for (const entry of entries) {
+                    if (entry.isVisible) {
+                        this.#visibleElements.add(entry.target);
+                    } else {
+                        this.#visibleElements.delete(entry.target);
+                    }
+                }
+            }, { trackVisibility: true, delay: 100 });
+        }
+
         this.#createDock();
         this.#registerEvents();
     }
 
+    // The page only sees an empty <div>: the dock, the trash zone and all
+    // their styles live in its closed shadow root, so no id, class or global
+    // stylesheet is exposed for the page to match, restyle or spoof.
+    // The host must stay a built-in element: a custom element name (anything
+    // with a hyphen) can be registered by the page beforehand, and its class
+    // then reads the closed shadow root through ElementInternals.shadowRoot.
     #createDock() {
-        this.dom.dock = document.createElement('div');
-        this.dom.dock.id = 'dock';
-        this.dom.dock.classList.toggle('dock-top', this.state.position === 'top');
+        this.dom.host = document.createElement('div');
+        const shadow = this.dom.host.attachShadow({ mode: 'closed' });
+        this.dom.shadow = shadow;
 
-        const shadow = this.dom.dock.attachShadow({ mode: 'closed' });
+        // Keeps the shadow content hidden (no unstyled flash) until the real
+        // sheet arrives, which then replaces it.
+        const bootStyle = document.createElement('style');
+        bootStyle.textContent = ':host { display: none !important; }';
+        shadow.appendChild(bootStyle);
 
-        fetch(api.runtime.getURL('dock-styles.css'))
-            .then(response => response.text())
+        // The background reads the packaged sheet: a fetch from here would need
+        // it to be web-accessible, i.e. exposed to every site.
+        api.runtime.sendMessage({ action: 'getStyles' })
             .then(cssText => {
-                // Create a style element
+                if (typeof cssText !== 'string') return;
                 const styleElement = document.createElement('style');
                 styleElement.textContent = cssText;
-
-                shadow.appendChild(styleElement);
+                bootStyle.replaceWith(styleElement);
             });
 
-        let template = document.createElement('template');
-        template.id = 'dock-template';
-        template.style.display = 'block';
-
-        const fragment = document.createDocumentFragment();
+        this.dom.dock = document.createElement('div');
+        this.dom.dock.className = 'dock';
+        this.dom.dock.classList.toggle('dock-top', this.state.position === 'top');
+        // Shown as a manual popover, i.e. in the browser's top layer: there,
+        // the opacity, transform, filter or z-index of the host's ancestors
+        // (all under the page's control, it can even move the host into a
+        // container of its own) no longer apply. The page can thus neither
+        // make the dock invisible nor slide it under the cursor to steal a
+        // real click. Without the Popover API the dock stays a plain
+        // fixed-position element.
+        this.state.topLayer = typeof this.dom.dock.showPopover === 'function';
+        if (this.state.topLayer) {
+            this.dom.dock.popover = 'manual';
+        }
 
         const dockContainer = document.createElement('div');
         dockContainer.className = 'dock-container';
@@ -81,21 +121,49 @@ class Dock {
         dockContainer.appendChild(this.dom.grip);
 
         this.dom.dockItemContainer = document.createElement('div');
-        this.dom.dockItemContainer.id = 'tab-group-container';
         this.dom.dockItemContainer.className = 'tab-group-container';
         dockContainer.appendChild(this.dom.dockItemContainer);
 
-        fragment.appendChild(dockContainer);
-        template.appendChild(fragment);
-
-        shadow.appendChild(template);
-        document.body.appendChild(this.dom.dock);
+        this.dom.dock.appendChild(dockContainer);
+        shadow.appendChild(this.dom.dock);
+        document.body.appendChild(this.dom.host);
+        this.#showInTopLayer(this.dom.dock);
 
         this.expandDock();
     }
 
+    // No-op when already shown. A popover closes by itself when its tree
+    // leaves the document, so a host moved by the page comes back hidden
+    // (cf. the :not(:popover-open) rules) until this runs again.
+    #showInTopLayer(el) {
+        if (!this.state.topLayer || !this.dom.host.isConnected) return;
+        try {
+            if (!el.matches(':popover-open')) el.showPopover();
+        } catch (e) { }
+    }
+
+    // The top layer is a stack and the page can push its own elements onto
+    // it after ours: hiding and showing again moves el back to the top.
+    #raise(el) {
+        if (!this.state.topLayer || !this.dom.host.isConnected) return;
+        try {
+            if (el.matches(':popover-open')) el.hidePopover();
+            el.showPopover();
+        } catch (e) { }
+    }
+
     #registerEvents() {
         this.dom.dock.addEventListener('mouseover', e => {
+            // The pointer reaches the dock, so the dock must be what the user
+            // sees there: back above anything the page stacked over it
+            // (a click-through overlay hides it without blocking the mouse).
+            // Not mid-drag: hiding would drop the drag's transitions.
+            if (!this.state.isOver && e.isTrusted && !this.state.isDraggingDock && !this.state.isReordering) {
+                this.#raise(this.dom.dock);
+                // Commit the pre-expansion offset of the re-shown dock, so
+                // the slide of expandDock() still plays.
+                this.dom.dock.getBoundingClientRect();
+            }
             this.state.isOver = true;
             if (!this.state.isDraggingDock) {
                 this.expandDock();
@@ -118,7 +186,23 @@ class Dock {
         this.dom.dockItemContainer.addEventListener('click', this.#handleDockItemEvents.bind(this));
         this.dom.dockItemContainer.addEventListener('mousedown', this.#handleDockItemEvents.bind(this));
 
+        // An element going fullscreen joins the top layer above the dock. When
+        // it contains the host (the page itself going fullscreen), the dock
+        // is part of what is displayed and comes back above it, as it did
+        // before living in the top layer; a fullscreen video stays alone.
+        document.addEventListener('fullscreenchange', () => {
+            const fullscreenElement = document.fullscreenElement;
+            if (fullscreenElement && fullscreenElement.contains(this.dom.host)
+                && !this.state.removed && !this.state.isDraggingDock && !this.state.isReordering) {
+                this.#raise(this.dom.dock);
+            }
+        });
+
         document.addEventListener('mousemove', (e) => {
+            // Back in the top layer if the page moved the host meanwhile.
+            if (!this.state.removed) {
+                this.#showInTopLayer(this.dom.dock);
+            }
             const nearEdge = this.state.position === 'top'
                 ? e.clientY < window.innerHeight * 0.1
                 : e.clientY > window.innerHeight * 0.9;
@@ -157,6 +241,22 @@ class Dock {
         });
     }
 
+    watchVisibility(el) {
+        if (this.#visibilityObserver) this.#visibilityObserver.observe(el);
+    }
+
+    unwatchVisibility(el) {
+        if (this.#visibilityObserver) this.#visibilityObserver.unobserve(el);
+    }
+
+    // False when the browser reports el (watched beforehand) as not plainly
+    // visible: the page may have painted something of its own over it, to
+    // dress a dock control up as one of its buttons. Always true where the
+    // browser can't tell (no IntersectionObserver v2).
+    isUnobstructed(el) {
+        return !this.#visibilityObserver || this.#visibleElements.has(el);
+    }
+
     beginReorder() {
         this.state.isReordering = true;
     }
@@ -178,7 +278,7 @@ class Dock {
     // of dock items and tab rows (the grip is outside their containers).
     #registerGripDrag() {
         this.dom.grip.addEventListener('mousedown', (e) => {
-            if (e.button !== 0 || this.state.removed) return;
+            if (!e.isTrusted || e.button !== 0 || this.state.removed) return;
             e.preventDefault();
 
             this.state.isDraggingDock = true;
@@ -256,13 +356,22 @@ class Dock {
     #ensureTrashZone() {
         if (!this.dom.trash) {
             this.dom.trash = document.createElement('div');
-            this.dom.trash.id = 'dock-trash';
+            this.dom.trash.className = 'dock-trash';
             this.dom.trash.innerHTML =
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
                 + '<path d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-.9 12.1a2 2 0 0 1-2 1.9H8.9a2 2 0 0 1-2-1.9L6 9zm4 2.5v8h1.5v-8H10zm2.5 0v8H14v-8h-1.5z"/>'
                 + '</svg>';
-            document.body.appendChild(this.dom.trash);
+            if (this.state.topLayer) {
+                this.dom.trash.popover = 'manual';
+            }
+            // Sibling of the dock, not a child: the dock's transform would
+            // otherwise become the containing block of its position: fixed.
+            this.dom.shadow.appendChild(this.dom.trash);
         }
+        // In the top layer like the dock, and above it: z-index means nothing
+        // there, only the order of arrival. Invisible at rest, so re-showing
+        // it at every drag start is never seen.
+        this.#raise(this.dom.trash);
         return this.dom.trash;
     }
 
@@ -281,15 +390,14 @@ class Dock {
         this.dom.dock.style.transition = 'opacity 0.2s ease, scale 0.2s ease';
         this.dom.dock.style.opacity = '0';
         this.dom.dock.style.scale = '0.8';
-        setTimeout(() => {
-            this.dom.dock.remove();
-            if (this.dom.trash) {
-                this.dom.trash.remove();
-            }
-        }, 200);
+        // The trash lives in the same shadow root: removing the host takes it too
+        setTimeout(() => this.dom.host.remove(), 200);
     }
 
     #handleDockItemEvents(e) {
+        // Real user input only: an event dispatched by a script (the page's
+        // included) has isTrusted false and must never open a tab.
+        if (!e.isTrusted) return;
         const target = e.target.closest('.tab-group');
 
         if (target) {
@@ -301,13 +409,13 @@ class Dock {
                     case 'click':
                         if (e.target.closest('.favicon')) {
                             e.preventDefault();
-                            api.runtime.sendMessage({ action: 'openTab', tabUri: dockItem.getFirstTabUrl() });
+                            api.runtime.sendMessage({ action: 'openTab', domain: dockItem.domain });
                         }
                         break;
                     case 'mousedown':
                         if (e.target.closest('.favicon') && e.button === 1) {
                             e.preventDefault();
-                            api.runtime.sendMessage({ action: 'openAndNavigateToTab', tabUri: dockItem.getFirstTabUrl() });
+                            api.runtime.sendMessage({ action: 'openAndNavigateToTab', domain: dockItem.domain });
                         }
                         break;
                 }
@@ -368,8 +476,8 @@ class Dock {
         }
     }
 
-    // Switches the anchored edge. The storage.onChanged echo re-enters here
-    // with the same value, so an early return keeps it idempotent.
+    // Switches the anchored edge. The background's dockPositionChanged echo
+    // re-enters here with the same value, so an early return keeps it idempotent.
     setPosition(position, { persist = false } = {}) {
         if (position !== 'top' && position !== 'bottom') return;
 
@@ -384,7 +492,7 @@ class Dock {
         }
 
         if (persist) {
-            api.storage.local.set({ dockPosition: position });
+            api.runtime.sendMessage({ action: 'setDockPosition', position: position }).catch(() => { });
         }
     }
 
@@ -470,5 +578,3 @@ class Dock {
         desired.forEach(button => this.dom.dockItemContainer.appendChild(button));
     }
 }
-
-export default Dock;

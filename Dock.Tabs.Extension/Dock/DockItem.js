@@ -1,16 +1,23 @@
-import TabItem from './TabItem.js';
-import { attachDragReorder } from './DragReorder.js';
-import { api, isMV3 } from '../browser-api.js';
+// Decodes a data: PNG without any load the host page's CSP could block (no
+// <img>, no fetch). Anything else (null, a stale URL from an older schema, a
+// corrupt payload) resolves to null.
+async function decodeDataUrl(src) {
+    if (typeof src !== 'string' || !src.startsWith('data:image/png;base64,')) return null;
+    try {
+        const bytes = Uint8Array.from(atob(src.slice(src.indexOf(',') + 1)), c => c.charCodeAt(0));
+        return await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    } catch (e) {
+        return null;
+    }
+}
 
-// Cached decode of the default icon, fetched once per page. Extension URLs are
-// exempt from the host page's CSP when fetched from the content script, unlike
-// <img> loads (cf. the CSS fetch in Dock.js).
+// Cached decode of the default icon, requested once per page. It comes from
+// the background as a data: URL: the packaged file isn't web-accessible.
 let defaultBitmapPromise = null;
 function getDefaultBitmap() {
     if (!defaultBitmapPromise) {
-        defaultBitmapPromise = fetch(api.runtime.getURL('images/default_favicon.png'))
-            .then(response => response.blob())
-            .then(blob => createImageBitmap(blob));
+        defaultBitmapPromise = api.runtime.sendMessage({ action: 'getDefaultFavicon' })
+            .then(decodeDataUrl, () => null);
     }
     return defaultBitmapPromise;
 }
@@ -29,7 +36,8 @@ class DockItem {
             button: null,
             favicon: null,
             tabsListContainer: null,
-            tabsList: null
+            tabsList: null,
+            shield: null
         };
 
         this.parent = parent;
@@ -49,18 +57,13 @@ class DockItem {
 
         const fragment = document.createDocumentFragment();
 
-        if (isMV3) {
-            this.dom.favicon = document.createElement('img');
-            this.dom.favicon.alt = this.domain;
-        } else {
-            // The host page's CSP applies to <img> loads injected by content
-            // scripts; drawing on a canvas is not a document load, so it can't
-            // be blocked. The pixels come as a data: PNG from the background.
-            this.dom.favicon = document.createElement('canvas');
-            this.dom.favicon.width = 32;
-            this.dom.favicon.height = 32;
-            this.dom.favicon.title = this.domain;
-        }
+        // The host page's CSP applies to <img> loads injected by content
+        // scripts; drawing on a canvas is not a document load, so it can't be
+        // blocked. The pixels come as a data: PNG from the background.
+        this.dom.favicon = document.createElement('canvas');
+        this.dom.favicon.width = 32;
+        this.dom.favicon.height = 32;
+        this.dom.favicon.title = this.domain;
         this.dom.favicon.className = 'favicon';
         this.dom.favicon.dataset.domain = this.domain;
 
@@ -76,6 +79,15 @@ class DockItem {
         this.dom.tabsList = document.createElement('div');
         this.dom.tabsList.className = 'dropdown-content';
         this.dom.tabsListContainer.appendChild(this.dom.tabsList);
+
+        // Covers the dropdown without catching any event; only there for the
+        // parent to tell whether the rows are really what the user sees
+        // (cf. #closeTab).
+        this.dom.shield = document.createElement('div');
+        this.dom.shield.className = 'dropdown-shield';
+        this.dom.tabsListContainer.appendChild(this.dom.shield);
+        this.parent.watchVisibility(this.dom.shield);
+
         fragment.appendChild(this.dom.tabsListContainer);
 
         this.dom.button.appendChild(fragment);
@@ -84,8 +96,8 @@ class DockItem {
     #registerEvents() {
         this.dom.tabsListContainer.addEventListener('click', this.#handleTabItemEvents.bind(this));
         this.dom.tabsListContainer.addEventListener('mousedown', this.#handleTabItemEvents.bind(this));
-        this.dom.button.addEventListener('mouseenter', () => {
-            if (!this.parent.state.isReordering) {
+        this.dom.button.addEventListener('mouseenter', (e) => {
+            if (e.isTrusted && !this.parent.state.isReordering) {
                 this.parent.onDropdownOpen(this);
             }
         });
@@ -116,6 +128,9 @@ class DockItem {
     }
 
     #handleTabItemEvents(e) {
+        // Real user input only (cf. Dock.js): a scripted event must never
+        // focus or close a tab.
+        if (!e.isTrusted) return;
         const tabItem = e.target.closest('.tab-item');
         if (!tabItem) return;
 
@@ -139,7 +154,12 @@ class DockItem {
         }
     }
 
+    // Closing is the one action that can lose the user's work, so a real click
+    // isn't enough: it must land on a dropdown nothing covers. A page could
+    // otherwise paint a button of its own over a close button (click-through,
+    // above the dock) and have the user close another tab.
     #closeTab(tabId) {
+        if (!this.parent.isUnobstructed(this.dom.shield)) return;
         api.runtime.sendMessage({ action: 'closeTab', tabId: tabId });
     }
 
@@ -205,11 +225,8 @@ class DockItem {
         return this.tabs.map(t => t.id);
     }
 
-    getFirstTabUrl() {
-        return this.tabs[0]?.url;
-    }
-
     remove() {
+        this.parent.unwatchVisibility(this.dom.shield);
         this.dom.button.remove();
         this.tabItems = null;
     }
@@ -221,48 +238,15 @@ class DockItem {
 
     setFaviconSrc(src) {
         if (this.#renderedFavicon === src) return;
-        this.#renderedFavicon = src;
-
-        if (isMV3) {
-            let faviconSrc = src;
-            if (!faviconSrc || faviconSrc == "default_favicon.png") {
-                faviconSrc = api.runtime.getURL("images/default_favicon.png");
-            }
-            // One-shot: detached before the swap so a broken default can't loop.
-            this.dom.favicon.onerror = () => {
-                this.dom.favicon.onerror = null;
-                this.dom.favicon.src = api.runtime.getURL("images/default_favicon.png");
-            };
-            if (this.dom.favicon.src !== faviconSrc) {
-                this.dom.favicon.src = faviconSrc;
-            }
-            return;
-        }
-
         this.#drawFavicon(src);
     }
 
     async #drawFavicon(src) {
         const token = ++this.#renderToken;
-        let bitmap = null;
-        if (src && src.startsWith('data:')) {
-            try {
-                const bytes = Uint8Array.from(atob(src.split(',')[1]), c => c.charCodeAt(0));
-                bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
-            } catch (e) {
-                bitmap = null;
-            }
-        }
-        if (!bitmap) {
-            // null, "default_favicon.png", a stale raw URL from the old storage
-            // schema, or an undecodable payload: show the default icon.
-            bitmap = await getDefaultBitmap();
-        }
+        const bitmap = await decodeDataUrl(src) || await getDefaultBitmap();
         if (token !== this.#renderToken) return;
         const ctx = this.dom.favicon.getContext('2d');
         ctx.clearRect(0, 0, 32, 32);
-        ctx.drawImage(bitmap, 0, 0, 32, 32);
+        if (bitmap) ctx.drawImage(bitmap, 0, 0, 32, 32);
     }
 }
-
-export default DockItem;

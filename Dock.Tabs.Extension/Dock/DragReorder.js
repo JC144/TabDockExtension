@@ -34,7 +34,7 @@ function attachDragReorder(container, {
     let drag = null;
 
     function onPointerDown(e) {
-        if (drag !== null || e.button !== 0 || !e.isPrimary) return;
+        if (drag !== null || !e.isTrusted || e.button !== 0 || !e.isPrimary) return;
         const el = e.target.closest(itemSelector);
         if (!el || el.parentElement !== container) return;
         if (ignoreSelector && e.target.closest(ignoreSelector)) return;
@@ -314,5 +314,3 @@ function attachDragReorder(container, {
         }
     };
 }
-
-export { attachDragReorder };
